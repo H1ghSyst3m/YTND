@@ -37,7 +37,7 @@ YTND Bot is a complete solution for downloading audio from YouTube, featuring a 
 
 - **Python 3.10+**
 - **Poetry** for Python dependency management.
-- **Node.js and npm** (or yarn/pnpm) for the frontend.
+- **Node.js 20.x+** and **npm** (or yarn/pnpm) for the frontend.
 - **Syncthing** installed and accessible in your system's `PATH`.
 - **FFmpeg** installed and accessible in your system's `PATH`.
 
@@ -46,7 +46,7 @@ YTND Bot is a complete solution for downloading audio from YouTube, featuring a 
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/H1ghSyst3m/ytnd.git
-    cd ytnd-bot
+    cd ytnd
     ```
 
 2.  **Configure the environment:**
@@ -138,6 +138,19 @@ Start a chat with your bot on Telegram.
 2.  Open the link in your browser. You will be automatically logged in.
 3.  Once logged in, you can create a permanent username and password in the **Profile** section to log in without a token in the future.
 4.  Explore the dashboard, manage your songs, and monitor the download queue. If you are an admin, you can also manage users and view system logs.
+
+## 🔌 Networking
+
+If you are running this application behind a firewall, you will need to open the following ports for all services to function correctly:
+
+| Port          | Protocol | Service          | Description                                             |
+| :------------ | :------- | :--------------- | :------------------------------------------------------ |
+| **8080**      | `TCP`    | Web Manager      | FastAPI server for the web UI. Configurable via `MANAGER_PORT` in `.env`. |
+| **8384**      | `TCP`    | Syncthing API    | Web UI and REST API for Syncthing. Configurable via `SYNCTHING_URL` in `.env`. |
+| **22000**     | `TCP`    | Syncthing Sync   | Main data synchronization port for Syncthing.           |
+| **21027**     | `UDP`    | Syncthing Discovery | Used for local peer discovery.                          |
+
+Ensure these ports are allowed through your firewall and, if necessary, forwarded on your router.
 
 ## 📁 Project Structure
 
