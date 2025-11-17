@@ -29,6 +29,7 @@ def get_connection():
     try:
         conn = sqlite3.connect(str(_DB_PATH), timeout=10.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         yield conn
     except sqlite3.OperationalError as e:
