@@ -39,6 +39,7 @@ YTND Bot is a complete solution for downloading audio from YouTube, featuring a 
 - **Poetry** for Python dependency management.
 - **Node.js 20.x+** and **npm** (or yarn/pnpm) for the frontend.
 - **Syncthing** installed and accessible in your system's `PATH`.
+    - Synthing **API KEY** is also wound in `~/.config/syncthing/config.xml` 
 - **FFmpeg** installed and accessible in your system's `PATH`.
 
 ### Installation
