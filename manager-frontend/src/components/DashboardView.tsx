@@ -165,19 +165,6 @@ function DashboardView() {
                   </span>
                 </div>
 
-                {/* Syncthing Status */}
-                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
-                  <div className="flex items-center gap-2">
-                    {getStatusIcon(data.adminData.syncthingStatus.status)}
-                    <p className="font-medium text-sm sm:text-base">Syncthing</p>
-                  </div>
-                  {data.adminData.syncthingStatus.detail && (
-                    <p className="text-xs text-muted-foreground">
-                      {data.adminData.syncthingStatus.detail}
-                    </p>
-                  )}
-                </div>
-
                 {/* Log Summary */}
                 <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
                   <p className="font-medium text-sm sm:text-base mb-1">Recent Logs (24h)</p>

@@ -14,6 +14,7 @@ import UsersView from './components/UsersView';
 import QueueView from './components/QueueView';
 import LogView from './components/LogView';
 import LoginView from './components/LoginView';
+import SetupView from './components/SetupView';
 import ProfileView from './components/ProfileView';
 import * as api from './lib/api';
 
@@ -49,10 +50,26 @@ function MainApp() {
   const [selectedUser, setSelectedUser] = useState<string>('');
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // Check authentication status
+  // Check setup status first
+  const {
+    data: setupData,
+    isLoading: setupLoading,
+    isError: setupError,
+    error: setupErrorDetail,
+    refetch: refetchSetupStatus,
+  } = useQuery({
+    queryKey: ['setup-status'],
+    queryFn: api.getSetupStatus,
+    retry: 1,
+  });
+
+  const needsSetup = setupData?.needsSetup ?? false;
+
+  // Check authentication status after setup is complete
   const { data: authData, isLoading: authLoading } = useQuery({
     queryKey: ['auth'],
     queryFn: api.checkAuth,
+    enabled: !setupLoading && !needsSetup,
     retry: 1,
   });
 
@@ -68,6 +85,7 @@ function MainApp() {
   const { data: users } = useQuery({
     queryKey: ['users'],
     queryFn: api.getUsers,
+    enabled: isAuthenticated,
   });
 
   useEffect(() => {
@@ -109,12 +127,33 @@ function MainApp() {
   };
 
   // Show login view if not authenticated
-  if (authLoading) {
+  if (setupLoading || (!needsSetup && authLoading)) {
     return (
       <div className="flex h-screen items-center justify-center bg-background text-foreground">
         <div className="text-muted-foreground">Loading...</div>
       </div>
     );
+  }
+
+  if (setupError) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background text-foreground p-4">
+        <div className="max-w-md w-full text-center space-y-4">
+          <h1 className="text-2xl font-bold">YTND Manager</h1>
+          <p className="text-muted-foreground">
+            Failed to check setup status. Please verify server connectivity and try again.
+          </p>
+          <p className="text-sm text-destructive">
+            {setupErrorDetail instanceof Error ? setupErrorDetail.message : 'Unable to retrieve error details'}
+          </p>
+          <Button onClick={() => refetchSetupStatus()}>Retry</Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (needsSetup) {
+    return <SetupView />;
   }
 
   if (!isAuthenticated) {
@@ -145,7 +184,10 @@ function MainApp() {
               className="fixed md:relative top-0 left-0 h-full bg-card border-r border-border flex flex-col overflow-hidden z-50"
             >
               <div className="p-4 sm:p-6 border-b border-border">
-                <h1 className="text-xl sm:text-2xl font-bold">YTND Manager</h1>
+                <div className="flex items-center gap-2">
+                  <img src="/logo.png" alt="YTND logo" className="h-12 w-12 object-contain" />
+                  <h1 className="text-xl sm:text-2xl font-bold">Manager</h1>
+                </div>
               </div>
               
               <nav className="flex-1 p-3 sm:p-4 space-y-2 overflow-y-auto">

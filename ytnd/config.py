@@ -53,25 +53,16 @@ def find_ffmpeg(path_hint: str | None) -> str:
 ffmpeg_hint = os.getenv("FFMPEG_PATH")
 FFMPEG_EXECUTABLE = find_ffmpeg(ffmpeg_hint)
 
-# --- Bot and Admin Configuration ---
-BOT_TOKEN        = os.getenv("BOT_TOKEN", "").strip()
-DEFAULT_ADMIN_ID = os.getenv("DEFAULT_ADMIN_ID", "").strip()
-
-if not BOT_TOKEN:
-    raise RuntimeError("⚠️  BOT_TOKEN missing in .env!")
-
-if not DEFAULT_ADMIN_ID or not DEFAULT_ADMIN_ID.isdigit():
-    raise RuntimeError("⚠️  DEFAULT_ADMIN_ID missing or invalid (Telegram user ID as number required).")
-
-# --- Syncthing Configuration ---
-SYNCTHING_URL   = os.getenv("SYNCTHING_URL", "http://127.0.0.1:8384")
-SYNCTHING_API   = f"{SYNCTHING_URL.rstrip('/')}/rest"
-SYNCTHING_TOKEN = os.getenv("SYNCTHING_API_KEY", "").strip()
-
-if not SYNCTHING_TOKEN:
-    raise RuntimeError("⚠️  SYNCTHING_API_KEY missing in .env – see documentation!")
-
 # --- Manager Server Configuration ---
 MANAGER_HOST     = os.getenv("MANAGER_HOST", "0.0.0.0")
 MANAGER_PORT     = int(os.getenv("MANAGER_PORT", "8080"))
 MANAGER_BASE_URL = os.getenv("MANAGER_BASE_URL", f"http://{MANAGER_HOST}:{MANAGER_PORT}")
+MANAGER_SECRET   = os.getenv("MANAGER_SECRET", "").strip()
+WEBDAV_ENABLED   = os.getenv("WEBDAV_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+
+if not MANAGER_SECRET:
+    raise RuntimeError("⚠️  MANAGER_SECRET missing in .env!")
+
+# --- Optional first-run setup ---
+INITIAL_ADMIN_USERNAME = os.getenv("INITIAL_ADMIN_USERNAME", "").strip() or None
+INITIAL_ADMIN_PASSWORD = os.getenv("INITIAL_ADMIN_PASSWORD") or None

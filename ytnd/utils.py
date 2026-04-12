@@ -13,17 +13,15 @@ _re_illegal = re.compile(_illegal)
 def sanitize_user_id(user_id: str) -> str:
     """
     Validate and sanitize user ID to prevent path traversal.
-    User IDs should be numeric (Telegram IDs are numeric).
+    User IDs may only contain letters, numbers, underscores, and hyphens.
     """
     if not user_id or not isinstance(user_id, str):
         raise ValueError("Invalid user ID")
     
     user_id = user_id.strip()
-    
-    if not user_id.isdigit():
-        raise ValueError("User ID must be numeric")
-    
-    if any(c in user_id for c in ['/', '\\', '.', ':', '*', '?', '"', '<', '>', '|']):
+    if not user_id or len(user_id) > 64:
+        raise ValueError("User ID length must be between 1 and 64")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", user_id):
         raise ValueError("User ID contains invalid characters")
     
     return user_id
@@ -206,8 +204,6 @@ def setup_logging(
         atexit.register(lambda: _queue_listener and _queue_listener.stop())
 
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("telegram").setLevel(logging.INFO)
-
     _LOGGERS_STARTED = True
 
 setup_logging()

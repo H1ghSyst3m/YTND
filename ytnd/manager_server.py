@@ -3,20 +3,23 @@
 YTND Manager Server - FastAPI backend for managing YTND via web interface.
 """
 from __future__ import annotations
-import os, json, mimetypes, subprocess, hmac, hashlib, re, secrets, asyncio
+import os, json, mimetypes, subprocess, hmac, hashlib, re, secrets, asyncio, base64, binascii, time
+from uuid import uuid4
 from pathlib import Path
+from urllib.parse import urlparse, quote, unquote
+from html import escape
 from typing import Optional, List, Dict, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query, Body, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import yt_dlp
 from passlib.context import CryptContext
 
-from .config import OUTPUT_ROOT, COOKIES_FILE, COVERS_ROOT, BOT_TOKEN, DEFAULT_ADMIN_ID, SYNCTHING_API, LOG_DIR
+from .config import OUTPUT_ROOT, COOKIES_FILE, COVERS_ROOT, LOG_DIR, MANAGER_SECRET, WEBDAV_ENABLED
 from .downloader import Downloader
-from .manager_tokens import validate_and_get_uid, revoke_token
 from .utils import sanitize_filename, sanitize_user_id, is_youtube_playlist_url, strip_playlist_context, logger
 from . import database
 
@@ -26,13 +29,16 @@ MANAGER_HOST = os.getenv("MANAGER_HOST", "127.0.0.1")
 MANAGER_PORT = int(os.getenv("MANAGER_PORT", "8080"))
 LOG_FILE_PATH = LOG_DIR / "ytnd.log"
 
-SECRET = (os.getenv("MANAGER_SECRET") or BOT_TOKEN or "").encode("utf-8")
-if not SECRET:
-    raise RuntimeError("MANAGER_SECRET or BOT_TOKEN must be set (for session signature).")
+SECRET = MANAGER_SECRET.encode("utf-8")
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 _csrf_tokens: Dict[str, str] = {}
+
+# WebDAV brute-force throttle: keys are "username:ip", values are (fail_count, first_failure_time)
+_WEBDAV_MAX_FAILURES = 10
+_WEBDAV_LOCKOUT_SECONDS = 300
+_webdav_auth_failures: Dict[str, tuple[int, float]] = {}
 
 SESSION_UID_COOKIE = "ytnd_uid"
 SESSION_SIG_COOKIE = "ytnd_sig"
@@ -116,6 +122,29 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+class SetupRequest(BaseModel):
+    username: str
+    password: str
+
+MAX_UID_COLLISION_RETRIES = 5
+
+def _reject_cross_origin_setup(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+
+    origin_host = (urlparse(origin).netloc or "").lower()
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or ""
+    ).split(",")[0].strip().lower()
+
+    if not origin_host:
+        raise HTTPException(status_code=403, detail="Cross-origin setup requests are not allowed")
+    if host and origin_host != host:
+        raise HTTPException(status_code=403, detail="Cross-origin setup requests are not allowed")
+
 def _sign_uid(uid: str) -> str:
     mac = hmac.new(SECRET, uid.encode("utf-8"), hashlib.sha256).hexdigest()
     return mac
@@ -192,23 +221,43 @@ def require_csrf(request: Request, csrf_token: str = Form(...)):
     if not _verify_csrf_token(uid, csrf_token):
         raise HTTPException(status_code=403, detail="CSRF token invalid")
 
-@app.get("/auth/start")
-def auth_start(token: str, response: Response):
-    """
-    Validates token and sets session cookies. Token is one-time use.
-    """
-    uid = validate_and_get_uid(token)
-    if not uid:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+@app.get("/api/setup/status")
+def api_setup_status():
+    return {"needsSetup": not database.is_setup_complete()}
 
-    try:
-        revoke_token(token)
-    except Exception:
-        pass
-    
-    resp = RedirectResponse(url="/", status_code=302)
-    _set_session_cookies(resp, uid)
-    return resp
+@app.post("/api/setup")
+async def api_complete_setup(payload: SetupRequest, request: Request):
+    _reject_cross_origin_setup(request)
+
+    username = payload.username.strip()
+    password = payload.password
+
+    if not username or len(username) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if len(username) > 64:
+        raise HTTPException(status_code=400, detail="Username too long (max 64 characters)")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", username):
+        raise HTTPException(status_code=400, detail="Username can only contain letters, numbers, underscores, and hyphens")
+    if not password or len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    password_hash = pwd_context.hash(password)
+    for _ in range(MAX_UID_COLLISION_RETRIES):
+        uid = uuid4().hex[:12]
+        try:
+            database.complete_initial_setup(uid, username, password_hash, role="admin")
+            return {"success": True}
+        except ValueError as exc:
+            message = str(exc)
+            if message == "Already set up":
+                raise HTTPException(status_code=409, detail="Setup already complete") from None
+            if message == "Username already exists":
+                raise HTTPException(status_code=409, detail="Username already taken") from None
+            if message == "User already exists":
+                continue
+            raise HTTPException(status_code=500, detail="Failed to complete setup") from None
+
+    raise HTTPException(status_code=500, detail="Failed to complete setup")
 
 @app.get("/auth/logout")
 def auth_logout(response: Response):
@@ -546,6 +595,184 @@ def _assert_access(current: dict, requested_user_id: str) -> str:
         raise HTTPException(403, "Forbidden")
     return current["uid"]
 
+WEBDAV_AUDIO_EXTENSIONS = {".opus", ".mp3", ".m4a", ".flac", ".ogg"}
+WEBDAV_HTTP_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S GMT"
+
+def _webdav_unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": 'Basic realm="YTND WebDAV"'},
+    )
+
+def _webdav_auth_user(request: Request) -> dict:
+    client_ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    auth_header = request.headers.get("authorization") or ""
+
+    # Extract username before full decode to key the throttle counter.
+    _raw_username = ""
+    if auth_header.lower().startswith("basic "):
+        _, _, _enc = auth_header.partition(" ")
+        try:
+            _raw_username = base64.b64decode(_enc.strip(), validate=True).decode("utf-8", errors="replace").split(":", 1)[0]
+        except Exception:
+            pass
+
+    throttle_key = f"{_raw_username}:{client_ip}"
+    now = time.monotonic()
+    fail_count, first_fail_time = _webdav_auth_failures.get(throttle_key, (0, now))
+    if fail_count >= _WEBDAV_MAX_FAILURES:
+        if now - first_fail_time < _WEBDAV_LOCKOUT_SECONDS:
+            retry_after = int(_WEBDAV_LOCKOUT_SECONDS - (now - first_fail_time)) + 1
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed authentication attempts",
+                headers={"Retry-After": str(retry_after)},
+            )
+        del _webdav_auth_failures[throttle_key]
+        fail_count = 0
+
+    def _fail():
+        current_count, ft = _webdav_auth_failures.get(throttle_key, (0, time.monotonic()))
+        if current_count == 0:
+            ft = time.monotonic()
+        _webdav_auth_failures[throttle_key] = (current_count + 1, ft)
+        raise _webdav_unauthorized()
+
+    if not auth_header.lower().startswith("basic "):
+        _fail()
+
+    _, _, encoded = auth_header.partition(" ")
+    encoded = encoded.strip()
+    if not encoded:
+        _fail()
+    try:
+        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        _fail()
+
+    if ":" not in decoded:
+        _fail()
+    username, password = decoded.split(":", 1)
+    if not username or not password:
+        _fail()
+
+    user = database.get_user_by_username(username)
+    if not user or not user.get("password_hash"):
+        _fail()
+    if not pwd_context.verify(password, user["password_hash"]):
+        _fail()
+
+    _webdav_auth_failures.pop(throttle_key, None)
+    return user
+
+def _webdav_assert_access(auth_user: dict, requested_user_id: str) -> str:
+    try:
+        requested_user_id = sanitize_user_id(requested_user_id)
+    except ValueError:
+        raise HTTPException(403, "Invalid user ID")
+
+    if auth_user.get("role") == "admin":
+        return requested_user_id
+    if requested_user_id != auth_user.get("uid"):
+        raise HTTPException(403, "Forbidden")
+    return requested_user_id
+
+def _webdav_user_folder(user_id: str, *, create: bool = False) -> Path:
+    output_root = OUTPUT_ROOT.resolve()
+    folder = (OUTPUT_ROOT / user_id).resolve()
+    if not folder.is_relative_to(output_root):
+        raise HTTPException(400, "Invalid user folder")
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+def _webdav_is_allowed_file(path: Path) -> bool:
+    return path.name == "song-list.json" or path.suffix.lower() in WEBDAV_AUDIO_EXTENSIONS
+
+def _webdav_list_files(folder: Path) -> List[Path]:
+    files = []
+    for item in folder.iterdir():
+        if item.is_file() and _webdav_is_allowed_file(item):
+            files.append(item)
+    return sorted(files, key=lambda p: p.name.lower())
+
+def _webdav_resolve_file(folder: Path, file_name: str) -> Path:
+    file_name = unquote(file_name)
+    if not file_name or "/" in file_name or "\\" in file_name or file_name in {".", ".."}:
+        raise HTTPException(400, "Invalid filename")
+
+    target = (folder / file_name).resolve()
+    if not target.is_relative_to(folder):
+        raise HTTPException(400, "Invalid filename")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(404, "File not found")
+    if not _webdav_is_allowed_file(target):
+        raise HTTPException(404, "File not found")
+    return target
+
+def _webdav_dav_headers() -> Dict[str, str]:
+    return {
+        "DAV": "1",
+        "Allow": "OPTIONS, PROPFIND, GET, HEAD",
+    }
+
+def _webdav_mime_type(path: Path) -> str:
+    if path.suffix.lower() == ".opus":
+        return "audio/opus"
+    mime, _ = mimetypes.guess_type(str(path))
+    return mime or "application/octet-stream"
+
+def _webdav_prop_response(href: str, is_collection: bool, path: Path, display_name: str) -> str:
+    stat_result = path.stat()
+    mtime = datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc).strftime(WEBDAV_HTTP_DATE_FORMAT)
+    resourcetype = "<d:resourcetype><d:collection/></d:resourcetype>" if is_collection else "<d:resourcetype/>"
+    content_type_xml = ""
+    content_length_xml = ""
+    if not is_collection:
+        content_type_xml = f"<d:getcontenttype>{escape(_webdav_mime_type(path))}</d:getcontenttype>"
+        content_length_xml = f"<d:getcontentlength>{stat_result.st_size}</d:getcontentlength>"
+
+    return (
+        "<d:response>"
+        f"<d:href>{escape(href)}</d:href>"
+        "<d:propstat><d:prop>"
+        f"{resourcetype}"
+        f"<d:displayname>{escape(display_name)}</d:displayname>"
+        f"<d:getlastmodified>{escape(mtime)}</d:getlastmodified>"
+        f"{content_type_xml}{content_length_xml}"
+        "</d:prop>"
+        "<d:status>HTTP/1.1 200 OK</d:status>"
+        "</d:propstat>"
+        "</d:response>"
+    )
+
+def _webdav_multistatus(user_id: str, folder: Path, files: List[Path], depth: str) -> str:
+    root_href = f"/webdav/{quote(user_id)}/"
+    responses = [_webdav_prop_response(root_href, True, folder, user_id)]
+    if depth != "0":
+        for file_path in files:
+            href = f"/webdav/{quote(user_id)}/{quote(file_path.name)}"
+            responses.append(_webdav_prop_response(href, False, file_path, file_path.name))
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        '<d:multistatus xmlns:d="DAV:">'
+        f"{''.join(responses)}"
+        "</d:multistatus>"
+    )
+
+def _webdav_file_response_headers(path: Path) -> Dict[str, str]:
+    stat_result = path.stat()
+    headers = _webdav_dav_headers()
+    headers.update({
+        "Content-Length": str(stat_result.st_size),
+        "Last-Modified": datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc).strftime(WEBDAV_HTTP_DATE_FORMAT),
+        "Content-Type": _webdav_mime_type(path),
+    })
+    return headers
+
 def _check_ytdlp_status() -> Dict[str, Any]:
     """Check yt-dlp status and version."""
     try:
@@ -590,23 +817,6 @@ def _check_cookies_status() -> Dict[str, str]:
     if COOKIES_FILE.exists():
         return {"status": "present"}
     return {"status": "missing"}
-
-def _check_syncthing_status() -> Dict[str, str]:
-    """Check Syncthing API connection."""
-    try:
-        import requests
-        from .config import SYNCTHING_TOKEN
-        headers = {"X-API-Key": SYNCTHING_TOKEN}
-        response = requests.get(f"{SYNCTHING_API}/system/status", headers=headers, timeout=5)
-        if response.status_code == 200:
-            return {"status": "ok", "detail": "Connected"}
-        return {"status": "error", "detail": f"HTTP {response.status_code}"}
-    except requests.exceptions.Timeout:
-        return {"status": "error", "detail": "Connection timeout"}
-    except requests.exceptions.ConnectionError:
-        return {"status": "error", "detail": "Connection refused"}
-    except Exception as e:
-        return {"status": "error", "detail": str(e)[:100]}
 
 def _get_log_summary() -> Dict[str, int]:
     """Get summary of log entries by severity from the last 24 hours."""
@@ -689,7 +899,6 @@ def api_dashboard(current: dict = Depends(require_session)):
             "ytDlpStatus": _check_ytdlp_status(),
             "ffmpegStatus": _check_ffmpeg_status(),
             "cookiesStatus": _check_cookies_status(),
-            "syncthingStatus": _check_syncthing_status(),
             "logSummary": _get_log_summary(),
         }
         response["adminData"] = admin_data
@@ -1024,8 +1233,10 @@ async def api_create_user(
     if not user_id:
         raise HTTPException(status_code=400, detail="User ID is required")
     
-    if not isinstance(user_id, str) or not user_id.isdigit():
-        raise HTTPException(status_code=400, detail="User ID must be a numeric string")
+    try:
+        user_id = sanitize_user_id(str(user_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     
     if role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="Role must be 'admin' or 'user'")
@@ -1046,16 +1257,20 @@ async def api_delete_user(
     user_id: str,
     current: dict = Depends(require_session)
 ):
-    """Delete a user (Admin only, cannot delete DEFAULT_ADMIN_ID)"""
+    """Delete a user (Admin only)."""
     if current["role"] != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
-    
-    if user_id == DEFAULT_ADMIN_ID:
-        raise HTTPException(status_code=403, detail="Cannot delete default admin")
-    
-    if not database.remove_user(user_id):
-        raise HTTPException(status_code=404, detail="User not found")
-    
+
+    try:
+        database.remove_user_if_not_last_admin(user_id)
+    except ValueError as e:
+        msg = str(e)
+        if msg == "User not found":
+            raise HTTPException(status_code=404, detail="User not found")
+        if msg == "Last admin":
+            raise HTTPException(status_code=409, detail="Cannot delete the last admin account")
+        raise HTTPException(status_code=500, detail="Failed to delete user")
+
     await manager.broadcast_to_all_admins({
         "type": "users_updated"
     })
@@ -1224,8 +1439,63 @@ async def api_process_queue(
             _active_downloads[user_id] = False
     
     asyncio.create_task(run_download())
-    
+
     return {"message": "Download process started", "queued": len(queue)}
+
+if WEBDAV_ENABLED:
+    @app.api_route("/webdav/{user_id}/", methods=["OPTIONS", "PROPFIND", "GET", "HEAD"])
+    async def webdav_root(user_id: str, request: Request):
+        auth_user = _webdav_auth_user(request)
+        user_id = _webdav_assert_access(auth_user, user_id)
+        folder = _webdav_user_folder(user_id)
+        files = _webdav_list_files(folder)
+
+        if request.method == "OPTIONS":
+            return Response(status_code=200, headers=_webdav_dav_headers())
+
+        if request.method == "PROPFIND":
+            depth = (request.headers.get("Depth") or "1").strip()
+            if depth not in {"0", "1"}:
+                raise HTTPException(400, "Invalid Depth header")
+            xml = _webdav_multistatus(user_id, folder, files, depth)
+            return Response(status_code=207, content=xml, media_type="application/xml", headers=_webdav_dav_headers())
+
+        if request.method == "HEAD":
+            return Response(status_code=200, headers=_webdav_dav_headers())
+
+        return Response(
+            status_code=200,
+            content=json.dumps({"files": [f.name for f in files]}),
+            media_type="application/json",
+            headers=_webdav_dav_headers(),
+        )
+
+    @app.api_route("/webdav/{user_id}/{file_name:path}", methods=["OPTIONS", "PROPFIND", "GET", "HEAD"])
+    async def webdav_file(user_id: str, file_name: str, request: Request):
+        auth_user = _webdav_auth_user(request)
+        user_id = _webdav_assert_access(auth_user, user_id)
+        folder = _webdav_user_folder(user_id)
+        target = _webdav_resolve_file(folder, file_name)
+
+        if request.method == "OPTIONS":
+            return Response(status_code=200, headers=_webdav_dav_headers())
+
+        if request.method == "PROPFIND":
+            href = f"/webdav/{quote(user_id)}/{quote(target.name)}"
+            xml = (
+                '<?xml version="1.0" encoding="utf-8"?>'
+                '<d:multistatus xmlns:d="DAV:">'
+                f"{_webdav_prop_response(href, False, target, target.name)}"
+                "</d:multistatus>"
+            )
+            return Response(status_code=207, content=xml, media_type="application/xml", headers=_webdav_dav_headers())
+
+        if request.method == "HEAD":
+            return Response(status_code=200, headers=_webdav_file_response_headers(target))
+
+        headers = _webdav_file_response_headers(target)
+        media_type = headers.get("Content-Type")
+        return FileResponse(target, media_type=media_type, filename=target.name, headers=headers)
 
 # ───────────────────────── Frontend ─────────────────────────
 if FRONTEND_DIR.exists():
@@ -1236,6 +1506,13 @@ if FRONTEND_DIR.exists():
         vite_svg = FRONTEND_DIR / "vite.svg"
         if vite_svg.exists():
             return FileResponse(vite_svg)
+        raise HTTPException(status_code=404, detail="Not found")
+
+    @app.get("/logo.png")
+    async def serve_logo():
+        logo = FRONTEND_DIR / "logo.png"
+        if logo.exists():
+            return FileResponse(logo, media_type="image/png")
         raise HTTPException(status_code=404, detail="Not found")
     
     @app.get("/{full_path:path}")

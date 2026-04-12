@@ -59,7 +59,6 @@ export interface AdminData {
   ytDlpStatus: SystemStatus;
   ffmpegStatus: SystemStatus;
   cookiesStatus: SystemStatus;
-  syncthingStatus: SystemStatus;
   logSummary: {
     error: number;
     warning: number;
@@ -78,6 +77,31 @@ export interface DashboardData {
 export async function checkAuth(): Promise<{ authorized: boolean }> {
   const res = await fetch(`${API_BASE}/api/ping`);
   return res.json();
+}
+
+export async function getSetupStatus(): Promise<{ needsSetup: boolean }> {
+  const res = await fetch(`${API_BASE}/api/setup/status`);
+  if (!res.ok) throw new Error('Failed to fetch setup status');
+  return res.json();
+}
+
+export async function completeSetup(username: string, password: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/setup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    let detail = 'Failed to complete setup';
+    try {
+      const error = await res.json();
+      if (error?.detail) detail = error.detail;
+    } catch {
+      const text = await res.text().catch(() => '');
+      if (text) detail = text;
+    }
+    throw new Error(detail);
+  }
 }
 
 export async function login(username: string, password: string): Promise<{ success: boolean; userId: string }> {

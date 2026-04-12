@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Music, Lock, User } from 'lucide-react';
+import { Lock, User } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card } from './ui/card';
@@ -38,7 +38,7 @@ export default function LoginView() {
         <Card className="w-full max-w-md p-8">
           <div className="flex flex-col items-center mb-8">
             <div className="bg-primary/10 p-4 rounded-full mb-4">
-              <Music className="h-12 w-12 text-primary" />
+              <img src="/logo.png" alt="YTND logo" className="h-12 w-12 object-contain" />
             </div>
             <h1 className="text-3xl font-bold text-center">YTND Manager</h1>
             <p className="text-muted-foreground text-center mt-2">
@@ -107,7 +107,7 @@ export default function LoginView() {
           </form>
 
           <div className="mt-6 text-center text-sm text-muted-foreground">
-            <p>Need access? Contact your administrator to get a login link via Telegram.</p>
+            <p>Contact your administrator for access.</p>
           </div>
         </Card>
       </motion.div>

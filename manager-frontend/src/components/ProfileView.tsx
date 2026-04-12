@@ -182,7 +182,7 @@ export default function ProfileView() {
             Set Login Credentials
           </h3>
           <p className="text-sm text-muted-foreground mb-4">
-            Set a username and password to enable login without a Telegram token.
+            Set a username and password to enable login.
           </p>
           <form onSubmit={handleSetCredentials} className="space-y-4">
             <div className="space-y-2">

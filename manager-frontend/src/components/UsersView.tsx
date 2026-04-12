@@ -263,7 +263,7 @@ function UsersView() {
               <Input
                 value={newUserId}
                 onChange={(e) => setNewUserId(e.target.value)}
-                placeholder="Enter Telegram user ID"
+                placeholder="Enter user ID"
               />
             </div>
             <div>

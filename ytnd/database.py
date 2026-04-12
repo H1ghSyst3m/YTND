@@ -4,8 +4,6 @@ SQLite database module for user and token management.
 """
 from __future__ import annotations
 import sqlite3
-import secrets
-import time
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 from contextlib import contextmanager
@@ -29,7 +27,6 @@ def get_connection():
     try:
         conn = sqlite3.connect(str(_DB_PATH), timeout=10.0)
         conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         yield conn
     except sqlite3.OperationalError as e:
@@ -43,7 +40,7 @@ def get_connection():
 
 def initialize_database() -> None:
     """
-    Initialize the database with users, auth_tokens, and queue tables.
+    Initialize the database with users and queue tables.
     Safe to call multiple times (uses IF NOT EXISTS).
     """
     with get_connection() as conn:
@@ -53,25 +50,9 @@ def initialize_database() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 uid TEXT PRIMARY KEY,
                 role TEXT NOT NULL DEFAULT 'user',
-                syncthing_device TEXT,
                 username TEXT UNIQUE,
                 password_hash TEXT
             )
-        """)
-        
-        # Auth tokens table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS auth_tokens (
-                token TEXT PRIMARY KEY,
-                uid TEXT NOT NULL,
-                exp INTEGER NOT NULL,
-                FOREIGN KEY (uid) REFERENCES users(uid) ON DELETE CASCADE
-            )
-        """)
-        
-        # Index for token expiration cleanup
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_token_exp ON auth_tokens(exp)
         """)
         
         # Queue table
@@ -92,14 +73,13 @@ def initialize_database() -> None:
         
         conn.commit()
 
-def add_user(uid: str, role: str = "user", syncthing_device: Optional[str] = None) -> None:
+def add_user(uid: str, role: str = "user") -> None:
     """
     Add a new user to the database.
     
     Args:
-        uid: Telegram user ID
+        uid: User ID
         role: User role ('admin' or 'user')
-        syncthing_device: Optional Syncthing device ID
     
     Raises:
         ValueError: If user already exists or invalid input
@@ -113,8 +93,8 @@ def add_user(uid: str, role: str = "user", syncthing_device: Optional[str] = Non
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "INSERT INTO users (uid, role, syncthing_device) VALUES (?, ?, ?)",
-                (str(uid), role, syncthing_device)
+                "INSERT INTO users (uid, role) VALUES (?, ?)",
+                (str(uid), role)
             )
             conn.commit()
         except sqlite3.IntegrityError:
@@ -126,21 +106,20 @@ def get_user(uid: str) -> Optional[Dict[str, Any]]:
     Get user information by UID.
     
     Args:
-        uid: Telegram user ID
+        uid: User ID
     
     Returns:
         Dictionary with user info or None if not found
-        Format: {"uid": str, "role": str, "syncthing_device": str|None, "username": str|None, "password_hash": str|None}
+        Format: {"uid": str, "role": str, "username": str|None, "password_hash": str|None}
     """
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT uid, role, syncthing_device, username, password_hash FROM users WHERE uid = ?", (str(uid),))
+        cursor.execute("SELECT uid, role, username, password_hash FROM users WHERE uid = ?", (str(uid),))
         row = cursor.fetchone()
         if row:
             return {
                 "uid": row["uid"],
                 "role": row["role"],
-                "syncthing_device": row["syncthing_device"],
                 "username": row["username"],
                 "password_hash": row["password_hash"]
             }
@@ -152,7 +131,7 @@ def update_user_role(uid: str, role: str) -> bool:
     Update a user's role.
     
     Args:
-        uid: Telegram user ID
+        uid: User ID
         role: New role ('admin' or 'user')
     
     Returns:
@@ -165,33 +144,12 @@ def update_user_role(uid: str, role: str) -> bool:
         return cursor.rowcount > 0
 
 
-def update_user_syncthing_id(uid: str, syncthing_device: str) -> bool:
-    """
-    Update a user's Syncthing device ID.
-    
-    Args:
-        uid: Telegram user ID
-        syncthing_device: Syncthing device ID
-    
-    Returns:
-        True if user was updated, False if user not found
-    """
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET syncthing_device = ? WHERE uid = ?",
-            (syncthing_device, str(uid))
-        )
-        conn.commit()
-        return cursor.rowcount > 0
-
-
 def remove_user(uid: str) -> bool:
     """
     Remove a user from the database.
     
     Args:
-        uid: Telegram user ID
+        uid: User ID
     
     Returns:
         True if user was removed, False if user not found
@@ -209,106 +167,17 @@ def list_users() -> Dict[str, Dict[str, Any]]:
     
     Returns:
         Dictionary mapping uid to user info
-        Format: {"uid": {"role": str, "syncthing_device": str|None}, ...}
+        Format: {"uid": {"role": str}, ...}
     """
     with get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT uid, role, syncthing_device FROM users")
+        cursor.execute("SELECT uid, role FROM users")
         users = {}
         for row in cursor.fetchall():
             users[row["uid"]] = {
                 "role": row["role"],
-                "syncthing_device": row["syncthing_device"]
             }
         return users
-
-
-# ────────────────────── Token Management ──────────────────────
-
-def issue_token(uid: str, ttl_seconds: int = 1800) -> str:
-    """
-    Issue a login token bound to a Telegram user ID.
-    
-    Args:
-        uid: Telegram user ID
-        ttl_seconds: Time to live in seconds (default: 30 minutes)
-    
-    Returns:
-        The generated token string
-    """
-    token = secrets.token_urlsafe(24)
-    exp = int(time.time()) + ttl_seconds
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO auth_tokens (token, uid, exp) VALUES (?, ?, ?)",
-            (token, str(uid), exp)
-        )
-        conn.commit()
-    
-    return token
-
-
-def validate_and_get_uid(token: str) -> Optional[str]:
-    """
-    Validate a token and return the associated user ID.
-    Automatically removes expired tokens.
-    
-    Args:
-        token: The token to validate
-    
-    Returns:
-        User ID if token is valid, None otherwise
-    """
-    now = int(time.time())
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT uid, exp FROM auth_tokens WHERE token = ?",
-            (token,)
-        )
-        row = cursor.fetchone()
-        
-        if not row:
-            return None
-        
-        if row["exp"] < now:
-            cursor.execute("DELETE FROM auth_tokens WHERE token = ?", (token,))
-            conn.commit()
-            return None
-        
-        return str(row["uid"])
-
-
-def revoke_token(token: str) -> None:
-    """
-    Revoke a token (e.g., for one-time links).
-    
-    Args:
-        token: The token to revoke
-    """
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM auth_tokens WHERE token = ?", (token,))
-        conn.commit()
-
-
-def cleanup_expired_tokens() -> int:
-    """
-    Remove all expired tokens from the database.
-    
-    Returns:
-        Number of tokens removed
-    """
-    now = int(time.time())
-    
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM auth_tokens WHERE exp < ?", (now,))
-        conn.commit()
-        return cursor.rowcount
 
 
 def get_queue(uid: str) -> List[str]:
@@ -411,7 +280,7 @@ def set_user_credentials(uid: str, username: str, password_hash: str) -> bool:
     Set or update username and password for a user.
     
     Args:
-        uid: Telegram user ID
+        uid: User ID
         username: New username (must be unique)
         password_hash: Hashed password
     
@@ -439,12 +308,156 @@ def set_user_credentials(uid: str, username: str, password_hash: str) -> bool:
             return False
 
 
+def create_user_with_credentials(uid: str, username: str, password_hash: str, role: str = "admin") -> None:
+    """Create a user with credentials atomically."""
+    if not uid or not isinstance(uid, str):
+        raise ValueError("Invalid user ID")
+    if not username or not isinstance(username, str):
+        raise ValueError("Invalid username")
+    if not password_hash or not isinstance(password_hash, str):
+        raise ValueError("Invalid password hash")
+    if role not in ("admin", "user"):
+        raise ValueError("Role must be 'admin' or 'user'")
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1 FROM users WHERE username = ? LIMIT 1", (username,))
+        if cursor.fetchone():
+            raise ValueError("Username already exists")
+
+        try:
+            cursor.execute(
+                "INSERT INTO users (uid, role, username, password_hash) VALUES (?, ?, ?, ?)",
+                (str(uid), role, username, password_hash),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as e:
+            cursor.execute("SELECT 1 FROM users WHERE username = ? LIMIT 1", (username,))
+            if cursor.fetchone():
+                raise ValueError("Username already exists") from e
+            raise ValueError("User already exists") from e
+
+
+def complete_initial_setup(uid: str, username: str, password_hash: str, role: str = "admin") -> None:
+    """
+    Atomically verify setup is incomplete and create the first admin user.
+
+    Raises:
+        ValueError("Already set up") – if a credentialed user already exists.
+        ValueError("Username already exists") – username UNIQUE constraint violated.
+        ValueError("User already exists") – uid PRIMARY KEY collision.
+    """
+    if not uid or not isinstance(uid, str):
+        raise ValueError("Invalid user ID")
+    if not username or not isinstance(username, str):
+        raise ValueError("Invalid username")
+    if not password_hash or not isinstance(password_hash, str):
+        raise ValueError("Invalid password hash")
+    if role not in ("admin", "user"):
+        raise ValueError("Role must be 'admin' or 'user'")
+
+    if _DB_PATH is None:
+        raise RuntimeError("Database path not set. Call set_database_path() first.")
+
+    conn = sqlite3.connect(str(_DB_PATH), timeout=10.0, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.execute("BEGIN EXCLUSIVE")
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT 1 FROM users
+            WHERE username IS NOT NULL AND username != ''
+              AND password_hash IS NOT NULL AND password_hash != ''
+            LIMIT 1
+            """
+        )
+        if cursor.fetchone():
+            conn.execute("ROLLBACK")
+            raise ValueError("Already set up")
+
+        try:
+            cursor.execute(
+                "INSERT INTO users (uid, role, username, password_hash) VALUES (?, ?, ?, ?)",
+                (str(uid), role, username, password_hash),
+            )
+            conn.execute("COMMIT")
+        except sqlite3.IntegrityError as e:
+            conn.execute("ROLLBACK")
+            cursor.execute("SELECT 1 FROM users WHERE username = ? LIMIT 1", (username,))
+            if cursor.fetchone():
+                raise ValueError("Username already exists") from e
+            raise ValueError("User already exists") from e
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def count_admins() -> int:
+    """Return the number of users with the admin role."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        row = cursor.fetchone()
+        return row[0] if row else 0
+
+
+def remove_user_if_not_last_admin(uid: str) -> None:
+    """
+    Atomically remove a user unless they are the last admin.
+
+    Raises:
+        ValueError("User not found") – uid does not exist.
+        ValueError("Last admin") – user is the only remaining admin.
+    """
+    if _DB_PATH is None:
+        raise RuntimeError("Database path not set. Call set_database_path() first.")
+
+    conn = sqlite3.connect(str(_DB_PATH), timeout=10.0, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.execute("BEGIN EXCLUSIVE")
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT role FROM users WHERE uid = ?", (str(uid),))
+        row = cursor.fetchone()
+        if not row:
+            conn.execute("ROLLBACK")
+            raise ValueError("User not found")
+
+        if row["role"] == "admin":
+            cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            count_row = cursor.fetchone()
+            if (count_row[0] if count_row else 0) <= 1:
+                conn.execute("ROLLBACK")
+                raise ValueError("Last admin")
+
+        cursor.execute("DELETE FROM users WHERE uid = ?", (str(uid),))
+        conn.execute("COMMIT")
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
 def update_user_password(uid: str, password_hash: str) -> bool:
     """
     Update password for a user.
     
     Args:
-        uid: Telegram user ID
+        uid: User ID
         password_hash: New hashed password
     
     Returns:
@@ -458,3 +471,21 @@ def update_user_password(uid: str, password_hash: str) -> bool:
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+def is_setup_complete() -> bool:
+    """Return True when at least one user has both username and password hash set."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT 1
+            FROM users
+            WHERE username IS NOT NULL
+              AND username != ''
+              AND password_hash IS NOT NULL
+              AND password_hash != ''
+            LIMIT 1
+            """
+        )
+        return cursor.fetchone() is not None

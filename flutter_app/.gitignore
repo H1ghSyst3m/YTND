@@ -1,0 +1,10 @@
+.dart_tool/
+.packages
+.pub/
+build/
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+**/android/**/GeneratedPluginRegistrant.*
+**/android/app/.cxx/
+.flutter-plugins-dependencies
