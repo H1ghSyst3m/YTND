@@ -263,8 +263,8 @@ class Downloader:
         eff_url = url if is_pl else strip_playlist_context(url)
 
         ydl_opts = {
-            'ignoreerrors': True,
-            'no_warnings': True,
+            'ignoreerrors': False,
+            'no_warnings': False,
             'force_ipv4': True,
             'extract_flat': 'in_playlist' if is_pl else False,
             'playlistend': 150 if is_pl else -1,
