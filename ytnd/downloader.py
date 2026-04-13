@@ -269,6 +269,7 @@ class Downloader:
             'extract_flat': 'in_playlist' if is_pl else False,
             'playlistend': 150 if is_pl else -1,
             'quiet': True,
+            'extractor_args': {'youtube': {'player_client': ['web']}},
         }
         if COOKIES_FILE.exists():
             ydl_opts['cookiefile'] = str(COOKIES_FILE)
@@ -328,6 +329,7 @@ class Downloader:
             'force_ipv4': True,
             'ffmpeg_location': FFMPEG_EXECUTABLE,
             'progress_hooks': [progress_hook],
+            'extractor_args': {'youtube': {'player_client': ['web']}},
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
