@@ -22,6 +22,7 @@ test = [
 ]
 
 [project.scripts]
+ytnd = "ytnd.cli:main"
 ytnd-manager = "ytnd.manager_server:run"
 
 [build-system]

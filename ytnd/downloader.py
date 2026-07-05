@@ -3,7 +3,7 @@
 Downloader with persistent queue managed via database.
 """
 from __future__ import annotations
-import json, uuid, concurrent.futures, time, subprocess, shutil, os, asyncio
+import json, uuid, concurrent.futures, time, subprocess, shutil
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 from mutagen.flac import FLAC
@@ -12,12 +12,14 @@ from mutagen.mp4 import MP4
 from mutagen.oggopus import OggOpus
 import yt_dlp
 
-from .config import FFMPEG_EXECUTABLE, OUTPUT_ROOT, SESSIONS_ROOT, COOKIES_FILE, COVERS_ROOT
+from .config import FFMPEG_EXECUTABLE, OUTPUT_ROOT, COOKIES_FILE, COVERS_ROOT
 from .utils import sanitize_filename, sanitize_user_id, logger, get_context_logger, is_youtube_playlist_url, strip_playlist_context
 from . import database
 
 if TYPE_CHECKING:
     from typing import Any
+
+AUDIO_EXTENSIONS = {".opus", ".mp3", ".m4a", ".flac", ".ogg"}
 
 def _shorten(s: str, maxlen: int = 600) -> str:
     s = (s or "").strip()
@@ -121,11 +123,14 @@ class Downloader:
     def add_urls(self, urls: List[str]) -> None:
         """Adds new links to the queue in the database"""
         queue = self._load_queue()
+        queued_urls = set(queue)
+        seen_urls = set()
         new_urls = []
         for u in urls:
             u = u.strip()
-            if u and len(u) <= 2000 and u not in queue:
+            if u and len(u) <= 2000 and u not in queued_urls and u not in seen_urls:
                 new_urls.append(u)
+                seen_urls.add(u)
         
         if new_urls:
             try:
@@ -269,7 +274,6 @@ class Downloader:
             'extract_flat': 'in_playlist' if is_pl else False,
             'playlistend': 150 if is_pl else -1,
             'quiet': True,
-            'extractor_args': {'youtube': {'player_client': ['web']}},
         }
         if COOKIES_FILE.exists():
             ydl_opts['cookiefile'] = str(COOKIES_FILE)
@@ -329,7 +333,6 @@ class Downloader:
             'force_ipv4': True,
             'ffmpeg_location': FFMPEG_EXECUTABLE,
             'progress_hooks': [progress_hook],
-            'extractor_args': {'youtube': {'player_client': ['web']}},
             'postprocessors': [
                 {
                     'key': 'FFmpegExtractAudio',
@@ -376,6 +379,8 @@ class Downloader:
                 raise DownloadError(entry, message=f"yt-dlp exit: {_shorten(err_msg)}", attempt=1, stderr=err_msg)
 
         for dl_file in self.out_dir.glob(f"{uid}_*"):
+            if not dl_file.is_file() or dl_file.suffix.lower() not in AUDIO_EXTENSIONS:
+                continue
             final_name = dl_file.name.split("_", 1)[1]
             final_path = self.out_dir / final_name
             dl_file.rename(final_path)
@@ -458,9 +463,6 @@ class Downloader:
 
         self.log.bind(step="cover", vid=entry.id).info("Converting cover from %s to .jpg", downloaded_cover.suffix)
         try:
-            if not Path(FFMPEG_EXECUTABLE).exists():
-                raise FileNotFoundError(f"FFmpeg not found at {FFMPEG_EXECUTABLE}")
-            
             cmd = [
                 str(FFMPEG_EXECUTABLE), "-y", "-i", str(downloaded_cover), 
                 "-v", "quiet", "-q:v", "2", str(final_cover_path)
@@ -480,7 +482,7 @@ class Downloader:
     def _set_tags(self, path: Path, entry: "_Entry") -> None:
         audio = None
         ext = path.suffix.lower()
-        if ext == ".mp3":   audio = EasyMP3(path)
+        if ext == ".mp3": audio = EasyMP3(path)
         elif ext == ".m4a": audio = MP4(path)
         elif ext == ".opus": audio = OggOpus(path)
         elif ext == ".flac": audio = FLAC(path)

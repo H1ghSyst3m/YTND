@@ -60,9 +60,6 @@ MANAGER_BASE_URL = os.getenv("MANAGER_BASE_URL", f"http://{MANAGER_HOST}:{MANAGE
 MANAGER_SECRET   = os.getenv("MANAGER_SECRET", "").strip()
 WEBDAV_ENABLED   = os.getenv("WEBDAV_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
 
-if not MANAGER_SECRET:
-    raise RuntimeError("⚠️  MANAGER_SECRET missing in .env!")
-
 # --- Optional first-run setup ---
 INITIAL_ADMIN_USERNAME = os.getenv("INITIAL_ADMIN_USERNAME", "").strip() or None
 INITIAL_ADMIN_PASSWORD = os.getenv("INITIAL_ADMIN_PASSWORD") or None

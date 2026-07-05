@@ -50,14 +50,57 @@ YTND Manager is a web-based management interface for downloading and organising 
     Now, edit the `.env` file with your details:
 
     ```env
-    # REQUIRED
+    # Required
     MANAGER_SECRET="change-me-to-a-random-secret"
 
-    # OPTIONAL: auto-create first admin if no users exist
+    # Manager server
+    MANAGER_HOST="0.0.0.0"
+    MANAGER_PORT="8080"
+    # Optional: override auto-generated base URL (example)
+    # MANAGER_BASE_URL="http://localhost:8080"
+
+    # Data paths
+    # Defaults in ytnd/config.py:
+    # DATA_ROOT = PROJECT_ROOT / "data"
+    # OUTPUT_ROOT = DATA_ROOT / "downloads"
+    # COVERS_ROOT = DATA_ROOT / "covers"
+    # LOG_DIR = DATA_ROOT / "logs"
+    # DATABASE_FILE = DATA_ROOT / "ytnd.db"
+    # COOKIES_FILE = DATA_ROOT / "cookies.txt"
+    # DATA_ROOT="./data"
+    # OUTPUT_ROOT="data/downloads"
+    # COVERS_ROOT="data/covers"
+    # LOG_DIR="data/logs"
+    # DATABASE_FILE="data/ytnd.db"
+    # COOKIES_FILE="data/cookies.txt"
+
+    # Optional: only set when ffmpeg is not available in PATH
+    # FFMPEG_PATH="/usr/bin/ffmpeg"
+
+    # Optional: enable WebDAV endpoint
+    WEBDAV_ENABLED="false"
+
+    # Optional: auto-create first admin if no users exist
     # INITIAL_ADMIN_USERNAME="admin"
     # INITIAL_ADMIN_PASSWORD="changeme123"
-    # WEBDAV_ENABLED="false"
     ```
+
+    | Variable | Required | Default | Description |
+    | :-- | :-- | :-- | :-- |
+    | `MANAGER_SECRET` | Yes | – | Secret key used for signing sessions. |
+    | `MANAGER_HOST` | No | `0.0.0.0` | Host/interface where the manager server listens. |
+    | `MANAGER_PORT` | No | `8080` | Port used by the manager server. |
+    | `MANAGER_BASE_URL` | No | Auto-generated (`http://MANAGER_HOST:MANAGER_PORT`) | Public base URL used by the manager. |
+    | `DATA_ROOT` | No | `PROJECT_ROOT / "data"` | Root directory for app data. |
+    | `OUTPUT_ROOT` | No | `DATA_ROOT / "downloads"` | Download output directory. |
+    | `COVERS_ROOT` | No | `DATA_ROOT / "covers"` | Cover image directory. |
+    | `LOG_DIR` | No | `DATA_ROOT / "logs"` | Log file directory. |
+    | `DATABASE_FILE` | No | `DATA_ROOT / "ytnd.db"` | SQLite database file path. |
+    | `COOKIES_FILE` | No | `DATA_ROOT / "cookies.txt"` | Path where your Netscape `cookies.txt` should be placed (needed for age-restricted content). |
+    | `FFMPEG_PATH` | No | Uses `PATH`/auto-detect | Path to ffmpeg binary if not available globally. |
+    | `WEBDAV_ENABLED` | No | `false` | Enables WebDAV endpoints when set to `true`. |
+    | `INITIAL_ADMIN_USERNAME` | No | – | Creates the initial admin user on startup (with password). |
+    | `INITIAL_ADMIN_PASSWORD` | No | – | Password for `INITIAL_ADMIN_USERNAME`. |
 
 3.  **Install backend dependencies:**
     Use uv to install Python dependencies.
@@ -92,6 +135,29 @@ This starts the FastAPI web server for the manager UI.
 1.  On first startup, complete the initial setup wizard to create the first admin account.
 2.  Sign in with username and password.
 3.  Explore the dashboard, manage songs, and monitor the download queue. Admins can also manage users and view logs.
+
+### WebDAV
+
+- Enable with `WEBDAV_ENABLED=true` in `.env`.
+- Endpoint pattern: `/webdav/{user_id}/`
+- Authentication: HTTP Basic Auth (`username:password`).
+- Access rules: admins can access every user's folder, regular users only their own.
+- Supported methods: `GET`, `HEAD`, `PROPFIND`, `OPTIONS`.
+- Brute-force protection: temporary lockout after repeated failed logins.
+
+### CLI
+
+Use the CLI for automation/cronjobs:
+
+```bash
+uv run ytnd <url> [url ...] [-u USER] [-w WORKERS]
+```
+
+Example:
+
+```bash
+uv run ytnd https://youtube.com/watch?v=... -u myuser -w 4
+```
 
 ## 📁 Project Structure
 

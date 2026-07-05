@@ -2,6 +2,16 @@
 
 const API_BASE = '';
 
+type QueryParams = URLSearchParams | Record<string, string>;
+
+function buildUrl(path: string, params?: QueryParams): string {
+  const url = `${API_BASE}${path}`;
+  if (!params) return url;
+
+  const search = params instanceof URLSearchParams ? params : new URLSearchParams(params);
+  return `${url}?${search.toString()}`;
+}
+
 export interface Song {
   id?: string;
   title: string;
@@ -219,7 +229,7 @@ export async function createUser(userId: string, role: 'admin' | 'user'): Promis
 }
 
 export async function updateUser(userId: string, role: 'admin' | 'user'): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/users/${userId}`, {
+  const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(userId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -232,7 +242,7 @@ export async function updateUser(userId: string, role: 'admin' | 'user'): Promis
 }
 
 export async function deleteUser(userId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/users/${userId}`, {
+  const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(userId)}`, {
     method: 'DELETE',
     credentials: 'include',
   });
@@ -244,7 +254,7 @@ export async function deleteUser(userId: string): Promise<void> {
 
 // Songs
 export async function getSongs(userId: string): Promise<Song[]> {
-  const res = await fetch(`${API_BASE}/api/songs?user_id=${userId}`, {
+  const res = await fetch(buildUrl('/api/songs', { user_id: userId }), {
     credentials: 'include',
   });
   if (!res.ok) throw new Error('Failed to fetch songs');
@@ -258,7 +268,7 @@ export async function deleteSong(userId: string, song: { id?: string; title?: st
   if (song.title) params.append('title', song.title);
   if (song.artist) params.append('artist', song.artist);
 
-  const res = await fetch(`${API_BASE}/api/songs?${params}`, {
+  const res = await fetch(buildUrl('/api/songs', params), {
     method: 'DELETE',
     credentials: 'include',
   });
@@ -276,7 +286,7 @@ export async function redownloadSong(
   if (song.title) params.append('title', song.title);
   if (song.artist) params.append('artist', song.artist);
 
-  const res = await fetch(`${API_BASE}/api/redownload?${params}`, {
+  const res = await fetch(buildUrl('/api/redownload', params), {
     method: 'POST',
     credentials: 'include',
   });
@@ -286,21 +296,21 @@ export async function redownloadSong(
 export function getCoverUrl(userId: string, song: Song): string | null {
   if (!song.cover_available) return null;
   if (song.cover) {
-    return `${API_BASE}/api/cover?user_id=${userId}&filename=${song.cover}`;
+    return buildUrl('/api/cover', { user_id: userId, filename: song.cover });
   }
   if (song.id) {
-    return `${API_BASE}/api/cover?user_id=${userId}&id=${song.id}`;
+    return buildUrl('/api/cover', { user_id: userId, id: song.id });
   }
   return null;
 }
 
 export function getDownloadUrl(userId: string, filename: string): string {
-  return `${API_BASE}/api/download?user_id=${encodeURIComponent(userId)}&filename=${encodeURIComponent(filename)}`;
+  return buildUrl('/api/download', { user_id: userId, filename });
 }
 
 // Queue
 export async function getQueue(userId: string): Promise<string[]> {
-  const res = await fetch(`${API_BASE}/api/queue?user_id=${userId}`, {
+  const res = await fetch(buildUrl('/api/queue', { user_id: userId }), {
     credentials: 'include',
   });
   if (!res.ok) throw new Error('Failed to fetch queue');
@@ -309,7 +319,7 @@ export async function getQueue(userId: string): Promise<string[]> {
 }
 
 export async function addToQueue(userId: string, urls: string[]): Promise<void> {
-  const res = await fetch(`${API_BASE}/api/queue?user_id=${userId}`, {
+  const res = await fetch(buildUrl('/api/queue', { user_id: userId }), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -320,7 +330,7 @@ export async function addToQueue(userId: string, urls: string[]): Promise<void> 
 
 export async function removeFromQueue(userId: string, urls?: string[]): Promise<void> {
   const body = urls ? { urls } : null;
-  const res = await fetch(`${API_BASE}/api/queue?user_id=${userId}`, {
+  const res = await fetch(buildUrl('/api/queue', { user_id: userId }), {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -330,7 +340,7 @@ export async function removeFromQueue(userId: string, urls?: string[]): Promise<
 }
 
 export async function processQueue(userId: string): Promise<{ message: string; queued: number }> {
-  const res = await fetch(`${API_BASE}/api/queue/process?user_id=${userId}`, {
+  const res = await fetch(buildUrl('/api/queue/process', { user_id: userId }), {
     method: 'POST',
     credentials: 'include',
   });
@@ -342,7 +352,7 @@ export async function processQueue(userId: string): Promise<{ message: string; q
 }
 
 export async function probeUrl(url: string): Promise<{ ok: boolean; reason: string }> {
-  const res = await fetch(`${API_BASE}/api/probe?url=${encodeURIComponent(url)}`, {
+  const res = await fetch(buildUrl('/api/probe', { url }), {
     credentials: 'include',
   });
   if (!res.ok) throw new Error('Failed to probe URL');

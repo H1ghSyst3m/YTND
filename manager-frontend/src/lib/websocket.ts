@@ -18,6 +18,18 @@ export interface WebSocketMessage {
 
 type MessageHandler = (message: WebSocketMessage) => void;
 
+const logDev = (...args: unknown[]) => {
+  if (import.meta.env.DEV) {
+    console.debug(...args);
+  }
+};
+
+const warnDev = (...args: unknown[]) => {
+  if (import.meta.env.DEV) {
+    console.warn(...args);
+  }
+};
+
 class WebSocketService {
   private ws: WebSocket | null = null;
   private queryClient: QueryClient | null = null;
@@ -28,8 +40,11 @@ class WebSocketService {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private isConnecting = false;
   private customHandlers: Set<MessageHandler> = new Set();
+  private shouldReconnect = false;
 
   connect(queryClient: QueryClient) {
+    this.shouldReconnect = true;
+
     if (this.ws?.readyState === WebSocket.OPEN || this.isConnecting) {
       return;
     }
@@ -41,13 +56,13 @@ class WebSocketService {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/ws`;
 
-    console.log('[WebSocket] Connecting to:', wsUrl);
+    logDev('[WebSocket] Connecting to:', wsUrl);
 
     try {
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
-        console.log('[WebSocket] Connected');
+        logDev('[WebSocket] Connected');
         this.isConnecting = false;
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;
@@ -61,30 +76,33 @@ class WebSocketService {
           const message: WebSocketMessage = JSON.parse(event.data);
           this.handleMessage(message);
         } catch (error) {
-          console.error('[WebSocket] Failed to parse message:', error);
+          warnDev('[WebSocket] Failed to parse message:', error);
         }
       };
 
       this.ws.onerror = (error) => {
-        console.error('[WebSocket] Error:', error);
+        warnDev('[WebSocket] Error:', error);
         this.isConnecting = false;
       };
 
       this.ws.onclose = () => {
-        console.log('[WebSocket] Connection closed');
+        logDev('[WebSocket] Connection closed');
         this.isConnecting = false;
         this.stopPingInterval();
-        this.scheduleReconnect();
+        if (this.shouldReconnect) {
+          this.scheduleReconnect();
+        }
       };
     } catch (error) {
-      console.error('[WebSocket] Failed to create connection:', error);
+      warnDev('[WebSocket] Failed to create connection:', error);
       this.isConnecting = false;
       this.scheduleReconnect();
     }
   }
 
   disconnect() {
-    console.log('[WebSocket] Disconnecting');
+    logDev('[WebSocket] Disconnecting');
+    this.shouldReconnect = false;
     this.stopPingInterval();
     
     if (this.reconnectTimeout) {
@@ -99,6 +117,7 @@ class WebSocketService {
 
     this.reconnectAttempts = 0;
     this.isConnecting = false;
+    this.queryClient = null;
   }
 
   addMessageHandler(handler: MessageHandler) {
@@ -112,14 +131,14 @@ class WebSocketService {
   private handleMessage(message: WebSocketMessage) {
     if (!this.queryClient) return;
 
-    console.log('[WebSocket] Received message:', message);
+    logDev('[WebSocket] Received message:', message);
 
     // Call custom handlers first
     this.customHandlers.forEach(handler => {
       try {
         handler(message);
       } catch (error) {
-        console.error('[WebSocket] Custom handler error:', error);
+        warnDev('[WebSocket] Custom handler error:', error);
       }
     });
 
@@ -171,13 +190,17 @@ class WebSocketService {
         break;
 
       default:
-        console.warn('[WebSocket] Unknown message type:', message.type);
+        warnDev('[WebSocket] Unknown message type:', message.type);
     }
   }
 
   private scheduleReconnect() {
+    if (!this.shouldReconnect) {
+      return;
+    }
+
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log('[WebSocket] Max reconnect attempts reached, giving up');
+      logDev('[WebSocket] Max reconnect attempts reached, giving up');
       return;
     }
 
@@ -186,13 +209,13 @@ class WebSocketService {
     }
 
     const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts);
-    console.log(`[WebSocket] Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
+    logDev(`[WebSocket] Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
 
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null;
       this.reconnectAttempts++;
       
-      if (this.queryClient) {
+      if (this.queryClient && this.shouldReconnect) {
         this.connect(this.queryClient);
       }
     }, delay);

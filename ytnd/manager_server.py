@@ -18,17 +18,26 @@ from pydantic import BaseModel
 import yt_dlp
 from passlib.context import CryptContext
 
-from .config import OUTPUT_ROOT, COOKIES_FILE, COVERS_ROOT, LOG_DIR, MANAGER_SECRET, WEBDAV_ENABLED
+from .config import (
+    OUTPUT_ROOT,
+    COOKIES_FILE,
+    COVERS_ROOT,
+    LOG_DIR,
+    MANAGER_HOST,
+    MANAGER_PORT,
+    MANAGER_SECRET,
+    WEBDAV_ENABLED,
+)
 from .downloader import Downloader
 from .utils import sanitize_filename, sanitize_user_id, is_youtube_playlist_url, strip_playlist_context, logger
 from . import database
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR.parent / "manager-frontend" / "dist"
-MANAGER_HOST = os.getenv("MANAGER_HOST", "127.0.0.1")
-MANAGER_PORT = int(os.getenv("MANAGER_PORT", "8080"))
 LOG_FILE_PATH = LOG_DIR / "ytnd.log"
 
+if not MANAGER_SECRET:
+    raise RuntimeError("MANAGER_SECRET missing in .env!")
 SECRET = MANAGER_SECRET.encode("utf-8")
 
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
@@ -1199,8 +1208,9 @@ def api_download(
 
 @app.get("/api/ping")
 def api_ping(request: Request):
-    has = (request.cookies.get(SESSION_UID_COOKIE) is not None) and (request.cookies.get(SESSION_SIG_COOKIE) is not None)
-    return {"authorized": bool(has)}
+    uid = request.cookies.get(SESSION_UID_COOKIE)
+    sig = request.cookies.get(SESSION_SIG_COOKIE)
+    return {"authorized": bool(uid and sig and _verify_uid(uid, sig))}
 
 @app.get("/api/probe")
 def api_probe(url: str, _: dict = Depends(require_session)):
