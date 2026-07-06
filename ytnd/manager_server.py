@@ -1210,7 +1210,8 @@ def api_download(
 def api_ping(request: Request):
     uid = request.cookies.get(SESSION_UID_COOKIE)
     sig = request.cookies.get(SESSION_SIG_COOKIE)
-    return {"authorized": bool(uid and sig and _verify_uid(uid, sig))}
+    authorized = bool(uid and sig and _verify_uid(uid, sig) and database.get_user(str(uid)))
+    return {"authorized": authorized}
 
 @app.get("/api/probe")
 def api_probe(url: str, _: dict = Depends(require_session)):
