@@ -1,9 +1,10 @@
 package com.h1ghsyst3m.ytnd
 
+import android.content.ClipData
 import android.content.Intent
 import android.os.Bundle
-import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
@@ -44,13 +45,7 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
     }
 
     private fun handleIntent(intent: Intent?, isInitial: Boolean) {
-        if (intent == null) return
-        val sharedText = when (intent.action) {
-            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
-            Intent.ACTION_VIEW -> intent.dataString
-            else -> null
-        }?.trim()
-
+        val sharedText = extractSharedText(intent)?.trim()
         if (sharedText.isNullOrEmpty()) return
 
         if (isInitial) {
@@ -62,6 +57,37 @@ class MainActivity : FlutterActivity(), MethodChannel.MethodCallHandler, EventCh
             eventSink?.success(sharedText)
         } else {
             pendingSharedTexts.add(sharedText)
+        }
+    }
+
+    private fun extractSharedText(intent: Intent?): String? {
+        if (intent == null) return null
+        val parts = mutableListOf<String>()
+
+        when (intent.action) {
+            Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE -> {
+                intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()?.let { parts.add(it) }
+                intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT)?.toString()?.let { parts.add(it) }
+                intent.getCharSequenceExtra(Intent.EXTRA_TITLE)?.toString()?.let { parts.add(it) }
+                addClipText(intent.clipData, parts)
+            }
+            Intent.ACTION_VIEW -> intent.dataString?.let { parts.add(it) }
+        }
+
+        return parts
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .joinToString("\n")
+            .ifEmpty { null }
+    }
+
+    private fun addClipText(clipData: ClipData?, parts: MutableList<String>) {
+        if (clipData == null) return
+        for (index in 0 until clipData.itemCount) {
+            val item = clipData.getItemAt(index)
+            item.text?.toString()?.let { parts.add(it) }
+            item.uri?.toString()?.let { parts.add(it) }
         }
     }
 

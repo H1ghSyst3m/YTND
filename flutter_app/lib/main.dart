@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import 'screens/download_screen.dart';
-import 'screens/library_screen.dart';
-import 'screens/login_screen.dart';
+import 'screens/app_shell.dart';
 import 'services/api_service.dart';
 import 'services/background_sync_service.dart';
 import 'services/settings_service.dart';
+import 'services/share_intent_service.dart';
 import 'services/sync_service.dart';
 import 'services/websocket_service.dart';
 import 'state/app_state.dart';
+import 'theme/ytnd_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,9 +33,13 @@ class YtndApp extends StatelessWidget {
     required ApiService apiService,
     required BackgroundSyncService backgroundSyncService,
     required WebsocketService websocketService,
+    SettingsService? settingsService,
+    ShareIntentService? shareIntentService,
   })  : _apiService = apiService,
         _backgroundSyncService = backgroundSyncService,
-        _websocketService = websocketService;
+        _websocketService = websocketService,
+        _settingsService = settingsService,
+        _shareIntentService = shareIntentService;
 
   factory YtndApp.withDefaults({Key? key}) {
     return YtndApp(
@@ -49,83 +53,28 @@ class YtndApp extends StatelessWidget {
   final ApiService _apiService;
   final BackgroundSyncService _backgroundSyncService;
   final WebsocketService _websocketService;
+  final SettingsService? _settingsService;
+  final ShareIntentService? _shareIntentService;
 
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) => AppState(
-        settingsService: SettingsService(),
+        settingsService: _settingsService ?? SettingsService(),
         apiService: _apiService,
         syncService: SyncService(_apiService),
         backgroundSyncService: _backgroundSyncService,
         websocketService: _websocketService,
+        shareIntentService: _shareIntentService ?? ShareIntentService(),
       )..initialize(),
       child: MaterialApp(
         title: 'YTND',
+        debugShowCheckedModeBanner: false,
         themeMode: ThemeMode.system,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF12C6D3),
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
-        ),
-        darkTheme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF12C6D3),
-            brightness: Brightness.dark,
-            surface: const Color(0xFF1A2230),
-          ),
-          scaffoldBackgroundColor: const Color(0xFF1A2230),
-          useMaterial3: true,
-        ),
-        home: const AppRoot(),
+        theme: YtndTheme.light(),
+        darkTheme: YtndTheme.dark(),
+        home: const AppShell(),
       ),
-    );
-  }
-}
-
-class AppRoot extends StatefulWidget {
-  const AppRoot({super.key});
-
-  @override
-  State<AppRoot> createState() => _AppRootState();
-}
-
-class _AppRootState extends State<AppRoot> {
-  bool _checkedShareIntent = false;
-
-  void _handlePendingShareIntent(AppState appState) {
-    if (appState.pendingShareUrl != null) {
-      appState.consumePendingShareUrl();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const DownloadScreen()),
-        );
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<AppState>(
-      builder: (context, appState, _) {
-        if (!appState.initialized) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-        if (!appState.isAuthenticated) {
-          _checkedShareIntent = false;
-          return const LoginScreen();
-        }
-        if (!_checkedShareIntent) {
-          _checkedShareIntent = true;
-          _handlePendingShareIntent(appState);
-        }
-        return const LibraryScreen();
-      },
     );
   }
 }
