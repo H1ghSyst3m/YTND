@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ytnd/models/app_settings.dart';
 import 'package:ytnd/services/api_service.dart';
@@ -6,6 +9,18 @@ import 'package:ytnd/services/websocket_service.dart';
 import 'package:ytnd/state/app_state.dart';
 
 import 'fakes.dart';
+
+const _connectivityChannel =
+    MethodChannel('dev.fluttercommunity.plus/connectivity');
+
+const _signedInSettings = AppSettings(
+  serverUrl: 'http://ytnd.local:8080',
+  username: 'demo',
+  password: 'secret',
+  userId: 'u1',
+  sessionCookie: 'cookie',
+  storagePath: 'test-storage',
+);
 
 AppState _buildState({
   FakeSettingsService? settingsService,
@@ -26,6 +41,8 @@ AppState _buildState({
 }
 
 void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+
   test('initialize keeps server editable when saved server is unreachable',
       () async {
     final settings = FakeSettingsService(
@@ -127,14 +144,7 @@ void main() {
 
   test('websocket download errors do not expose raw backend text', () async {
     final settings = FakeSettingsService(
-      settings: const AppSettings(
-        serverUrl: 'http://ytnd.local:8080',
-        username: 'demo',
-        password: 'secret',
-        userId: 'u1',
-        sessionCookie: 'cookie',
-        storagePath: 'test-storage',
-      ),
+      settings: _signedInSettings,
     );
     final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
     final websocket = FakeWebsocketService();
@@ -172,6 +182,119 @@ void main() {
       state.lastErrorMessage,
       'Download failed. Check the link and try again.',
     );
+  });
+
+  for (final kind in [
+    ApiErrorKind.notFound,
+    ApiErrorKind.conflict,
+    ApiErrorKind.invalidResponse,
+    ApiErrorKind.unknown,
+    ApiErrorKind.server,
+    ApiErrorKind.invalidRequest,
+  ]) {
+    test('operation error $kind preserves the global connection state',
+        () async {
+      final settings = FakeSettingsService(settings: _signedInSettings);
+      final api = FakeApiService()
+        ..addError = ApiException(
+          kind: kind,
+          message: 'Operation failed.',
+        );
+      final state = _buildState(settingsService: settings, apiService: api);
+      await state.initialize();
+
+      final added = await state.addUrlsToQueue(['https://youtu.be/new123']);
+
+      expect(added, isFalse);
+      expect(state.connectionStatus, ConnectionStatus.connected);
+      expect(state.lastErrorMessage, 'Operation failed.');
+      expect(state.statusMessage, 'Operation failed.');
+    });
+  }
+
+  for (final kind in [ApiErrorKind.network, ApiErrorKind.timeout]) {
+    test('operation error $kind marks the server unreachable', () async {
+      final settings = FakeSettingsService(settings: _signedInSettings);
+      final api = FakeApiService()
+        ..addError = ApiException(
+          kind: kind,
+          message: 'Cannot reach the server.',
+        );
+      final state = _buildState(settingsService: settings, apiService: api);
+      await state.initialize();
+
+      final added = await state.addUrlsToQueue(['https://youtu.be/new123']);
+
+      expect(added, isFalse);
+      expect(state.connectionStatus, ConnectionStatus.unreachable);
+      expect(state.lastErrorMessage, 'Cannot reach the server.');
+    });
+  }
+
+  test('syncNow locks before checking connectivity', () async {
+    final connectivity = Completer<List<String>>();
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      _connectivityChannel,
+      (call) {
+        expect(call.method, 'check');
+        return connectivity.future;
+      },
+    );
+    addTearDown(() {
+      binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        _connectivityChannel,
+        null,
+      );
+    });
+
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final state = _buildState(settingsService: settings);
+    await state.initialize();
+
+    final firstSync = state.syncNow();
+    expect(state.isSyncing, isTrue);
+
+    final secondSync = await state.syncNow();
+    expect(secondSync, isFalse);
+
+    connectivity.complete(['none']);
+
+    expect(await firstSync, isFalse);
+    expect(state.isSyncing, isFalse);
+    expect(state.connectionStatus, ConnectionStatus.unreachable);
+  });
+
+  test('dispose makes websocket and share events inert', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
+    final websocket = FakeWebsocketService();
+    final share = FakeShareIntentService();
+    final state = _buildState(
+      settingsService: settings,
+      apiService: api,
+      websocketService: websocket,
+      shareIntentService: share,
+    );
+    await state.initialize();
+
+    final initialQueue = List.of(state.downloadQueue);
+    state.dispose();
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_progress',
+        'url': 'https://youtu.be/new456',
+        'status': 'downloading',
+        'percentage': 50,
+      }),
+    );
+    share.controller.add(['https://youtu.be/shared789']);
+    await pumpEventQueue();
+
+    expect(state.downloadQueue, initialQueue);
+    expect(state.pendingShareUrls, isEmpty);
+    expect(settings.pendingShareUrls, isEmpty);
+    expect(websocket.connected, isFalse);
   });
 
   test('saving a different server clears the session but keeps the new server',

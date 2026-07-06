@@ -63,6 +63,7 @@ class AppState extends ChangeNotifier {
   bool _isLibraryLoading = false;
   bool _isQueueLoading = false;
   bool _isAddingToQueue = false;
+  bool _disposed = false;
   ConnectionStatus _connectionStatus = ConnectionStatus.setupRequired;
   String _statusMessage = '';
   String? _lastErrorMessage;
@@ -426,20 +427,20 @@ class AppState extends ChangeNotifier {
       return false;
     }
 
-    final connected = await _hasNetwork();
-    if (!connected) {
-      _statusMessage = 'Sync skipped: no network access.';
-      _connectionStatus = ConnectionStatus.unreachable;
-      notifyListeners();
-      return false;
-    }
-
     _isSyncing = true;
     _statusMessage = 'Sync in progress...';
     _lastErrorMessage = null;
     notifyListeners();
 
     try {
+      final connected = await _hasNetwork();
+      if (!connected) {
+        _statusMessage = 'Sync skipped: no network access.';
+        _connectionStatus = ConnectionStatus.unreachable;
+        notifyListeners();
+        return false;
+      }
+
       final permissionGranted = await _requestStoragePermissions();
       if (!permissionGranted) {
         _statusMessage = 'Sync skipped: storage permission denied.';
@@ -722,6 +723,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _receiveSharedUrls(List<String> urls) async {
+    if (_disposed) {
+      return;
+    }
     final normalized = _uniqueUrls(urls);
     if (normalized.isEmpty) {
       return;
@@ -762,13 +766,24 @@ class AppState extends ChangeNotifier {
     final message = _messageFor(error, fallbackMessage);
     _lastErrorMessage = message;
     _statusMessage = message;
-    final status = _statusForError(error);
-    if (status == ConnectionStatus.unauthorized) {
-      await _expireSession(message);
-      return;
-    }
-    if (status == ConnectionStatus.unreachable) {
-      _connectionStatus = ConnectionStatus.unreachable;
+    if (error is ApiException) {
+      switch (error.kind) {
+        case ApiErrorKind.unauthorized:
+        case ApiErrorKind.forbidden:
+          await _expireSession(message);
+          return;
+        case ApiErrorKind.network:
+        case ApiErrorKind.timeout:
+          _connectionStatus = ConnectionStatus.unreachable;
+          break;
+        case ApiErrorKind.invalidRequest:
+        case ApiErrorKind.server:
+        case ApiErrorKind.invalidResponse:
+        case ApiErrorKind.conflict:
+        case ApiErrorKind.notFound:
+        case ApiErrorKind.unknown:
+          break;
+      }
     }
     notifyListeners();
   }
@@ -861,6 +876,9 @@ class AppState extends ChangeNotifier {
   }
 
   void _handleWsEvent(WsEvent event) {
+    if (_disposed) {
+      return;
+    }
     if (event.userId != null && event.userId != _settings.userId) {
       return;
     }
@@ -1007,6 +1025,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     unawaited(_shareSubscription?.cancel());
     unawaited(_disconnectWebsocket());
     super.dispose();

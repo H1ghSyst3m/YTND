@@ -27,4 +27,28 @@ Not supported: https://example.com/watch?v=abc123
 
     expect(urls, hasLength(3));
   });
+
+  test('trims common trailing punctuation from YouTube links', () {
+    final urls = SharedUrlParser.extractYoutubeUrls(
+      'Watch https://youtu.be/paren) and https://youtu.be/bracket] plus https://youtu.be/bang! and https://youtu.be/question?',
+    );
+
+    expect(urls, [
+      'https://youtu.be/paren',
+      'https://youtu.be/bracket',
+      'https://youtu.be/bang',
+      'https://youtu.be/question',
+    ]);
+  });
+
+  test('accepts http YouTube links and keeps balanced punctuation', () {
+    final urls = SharedUrlParser.extractYoutubeUrls(
+      'http://www.youtube.com/watch?v=plain https://www.youtube.com/watch?v=(abc)',
+    );
+
+    expect(urls, [
+      'http://www.youtube.com/watch?v=plain',
+      'https://www.youtube.com/watch?v=(abc)',
+    ]);
+  });
 }

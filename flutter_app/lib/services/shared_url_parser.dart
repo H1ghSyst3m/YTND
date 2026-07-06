@@ -27,14 +27,34 @@ class SharedUrlParser {
 
   static String _trimUrl(String url) {
     var value = url.trim();
-    while (value.endsWith('.') ||
-        value.endsWith(',') ||
-        value.endsWith(';') ||
-        value.endsWith(')') ||
-        value.endsWith(']')) {
+    while (value.isNotEmpty && _hasTrailingPunctuation(value)) {
       value = value.substring(0, value.length - 1);
     }
     return value;
+  }
+
+  static bool _hasTrailingPunctuation(String value) {
+    final last = value[value.length - 1];
+    return last == '.' ||
+        last == ',' ||
+        last == ';' ||
+        last == '!' ||
+        last == '?' ||
+        (last == ')' && _hasUnbalancedClosing(value, '(', ')')) ||
+        (last == ']' && _hasUnbalancedClosing(value, '[', ']'));
+  }
+
+  static bool _hasUnbalancedClosing(String value, String open, String close) {
+    var depth = 0;
+    for (final codeUnit in value.codeUnits) {
+      final char = String.fromCharCode(codeUnit);
+      if (char == open) {
+        depth++;
+      } else if (char == close) {
+        depth--;
+      }
+    }
+    return depth < 0;
   }
 
   static bool _isYoutubeHost(String host) {
