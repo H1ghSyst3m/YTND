@@ -390,6 +390,8 @@ class _ConnectionCard extends StatelessWidget {
         return Icons.cloud_off_outlined;
       case ConnectionStatus.unauthorized:
         return Icons.key_off_outlined;
+      case ConnectionStatus.invalidCredentials:
+        return Icons.lock_person_outlined;
     }
   }
 
@@ -404,6 +406,7 @@ class _ConnectionCard extends StatelessWidget {
         return scheme.secondary;
       case ConnectionStatus.unreachable:
       case ConnectionStatus.unauthorized:
+      case ConnectionStatus.invalidCredentials:
         return scheme.error;
     }
   }

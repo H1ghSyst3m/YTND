@@ -23,6 +23,7 @@ enum ConnectionStatus {
   connected,
   unreachable,
   unauthorized,
+  invalidCredentials,
 }
 
 class AppState extends ChangeNotifier {
@@ -119,6 +120,8 @@ class AppState extends ChangeNotifier {
         return 'Server unreachable';
       case ConnectionStatus.unauthorized:
         return 'Session expired';
+      case ConnectionStatus.invalidCredentials:
+        return 'Invalid credentials';
     }
   }
 
@@ -137,6 +140,8 @@ class AppState extends ChangeNotifier {
             'The server could not be reached. You can edit it in Settings.';
       case ConnectionStatus.unauthorized:
         return 'Sign in again or update the server details in Settings.';
+      case ConnectionStatus.invalidCredentials:
+        return 'Check your username and password, then try again.';
     }
   }
 
@@ -248,7 +253,10 @@ class AppState extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('Login failed: $e\n$st');
       _isAuthenticated = false;
-      _connectionStatus = _statusForError(e);
+      _connectionStatus = _statusForError(
+        e,
+        authFailureIsInvalidCredentials: true,
+      );
       _lastErrorMessage = _messageFor(e, 'Could not sign in.');
       _statusMessage = _lastErrorMessage!;
       notifyListeners();
@@ -827,12 +835,17 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  ConnectionStatus _statusForError(Object error) {
+  ConnectionStatus _statusForError(
+    Object error, {
+    bool authFailureIsInvalidCredentials = false,
+  }) {
     if (error is ApiException) {
       switch (error.kind) {
         case ApiErrorKind.unauthorized:
         case ApiErrorKind.forbidden:
-          return ConnectionStatus.unauthorized;
+          return authFailureIsInvalidCredentials
+              ? ConnectionStatus.invalidCredentials
+              : ConnectionStatus.unauthorized;
         case ApiErrorKind.network:
         case ApiErrorKind.timeout:
           return ConnectionStatus.unreachable;

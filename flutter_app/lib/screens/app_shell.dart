@@ -65,8 +65,8 @@ class _AppShellState extends State<AppShell> {
                     Text(
                       titles[_selectedIndex],
                       style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -148,8 +148,8 @@ class _SplashScreen extends StatelessWidget {
             Text(
               'Starting YTND...',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         ),
@@ -193,7 +193,9 @@ class _StatusBanner extends StatelessWidget {
               children: [
                 Text(
                   appState.connectionTitle,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -201,8 +203,8 @@ class _StatusBanner extends StatelessWidget {
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -221,7 +223,9 @@ class _StatusBanner extends StatelessWidget {
                 ),
               if (pendingCount > 0 && appState.isAuthenticated)
                 TextButton.icon(
-                  onPressed: appState.isAddingToQueue ? null : appState.retryPendingShareUrls,
+                  onPressed: appState.isAddingToQueue
+                      ? null
+                      : appState.retryPendingShareUrls,
                   icon: const Icon(Icons.playlist_add, size: 18),
                   label: const Text('Add'),
                 ),
@@ -243,7 +247,8 @@ class _StatusBanner extends StatelessWidget {
     final parts = <String>[appState.connectionMessage];
     if (pending > 0) {
       parts.add('$pending shared link(s) waiting.');
-    } else if (appState.statusMessage.isNotEmpty && appState.connectionStatus == ConnectionStatus.connected) {
+    } else if (appState.statusMessage.isNotEmpty &&
+        appState.connectionStatus == ConnectionStatus.connected) {
       parts.add(appState.statusMessage);
     }
     return parts.join(' ');
@@ -263,6 +268,8 @@ class _StatusBanner extends StatelessWidget {
         return Icons.cloud_off_outlined;
       case ConnectionStatus.unauthorized:
         return Icons.key_off_outlined;
+      case ConnectionStatus.invalidCredentials:
+        return Icons.lock_person_outlined;
     }
   }
 
@@ -277,8 +284,8 @@ class _StatusBanner extends StatelessWidget {
         return scheme.secondary;
       case ConnectionStatus.unreachable:
       case ConnectionStatus.unauthorized:
+      case ConnectionStatus.invalidCredentials:
         return scheme.error;
     }
   }
 }
-

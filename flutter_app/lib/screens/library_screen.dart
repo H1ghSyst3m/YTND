@@ -99,66 +99,89 @@ class _LibraryScreenState extends State<LibraryScreen> {
         final songs = _filterSongs(appState.songs);
         return RefreshIndicator(
           onRefresh: appState.refreshSongs,
-          child: ListView(
+          child: ListView.builder(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-            children: [
-              _LibraryHeader(
-                songCount: appState.songs.length,
-                visibleCount: songs.length,
-                isSyncing: appState.isSyncing,
-                isLoading: appState.isLibraryLoading,
-                onRefresh: appState.refreshSongs,
-                onSync: appState.syncNow,
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: _searchController,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _query.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Clear search',
-                          onPressed: _searchController.clear,
-                          icon: const Icon(Icons.close),
-                        ),
-                  labelText: 'Search library',
-                  hintText: 'Title or artist',
+            itemCount:
+                _headerItemCount(appState) + (songs.isEmpty ? 1 : songs.length),
+            itemBuilder: (context, index) {
+              final header = _headerItemAt(appState, songs, index);
+              if (header != null) {
+                return header;
+              }
+
+              if (songs.isEmpty) {
+                return _EmptyLibrary(hasQuery: _query.isNotEmpty);
+              }
+
+              final song = songs[index - _headerItemCount(appState)];
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _SongTile(
+                  song: song,
+                  coverUrl: appState.coverUrlFor(song),
+                  cookieHeader: appState.settings.sessionCookie,
+                  onDelete: () => _confirmDelete(context, song),
+                  onRedownload: () => _redownload(context, song),
                 ),
-              ),
-              const SizedBox(height: 16),
-              if (appState.isLibraryLoading) const LinearProgressIndicator(),
-              if (appState.isLibraryLoading) const SizedBox(height: 12),
-              if (appState.lastErrorMessage != null)
-                _InlineMessage(
-                  icon: Icons.warning_amber_outlined,
-                  title: 'Library needs attention',
-                  message: appState.lastErrorMessage!,
-                  actionLabel: 'Retry',
-                  onAction: appState.refreshSongs,
-                ),
-              if (songs.isEmpty)
-                _EmptyLibrary(hasQuery: _query.isNotEmpty)
-              else
-                ...songs.map(
-                  (song) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _SongTile(
-                      song: song,
-                      coverUrl: appState.coverUrlFor(song),
-                      cookieHeader: appState.settings.sessionCookie,
-                      onDelete: () => _confirmDelete(context, song),
-                      onRedownload: () => _redownload(context, song),
-                    ),
-                  ),
-                ),
-            ],
+              );
+            },
           ),
         );
       },
     );
+  }
+
+  int _headerItemCount(AppState appState) {
+    return 4 +
+        (appState.isLibraryLoading ? 2 : 0) +
+        (appState.lastErrorMessage != null ? 1 : 0);
+  }
+
+  Widget? _headerItemAt(AppState appState, List<Song> songs, int index) {
+    final items = <Widget>[
+      _LibraryHeader(
+        songCount: appState.songs.length,
+        visibleCount: songs.length,
+        isSyncing: appState.isSyncing,
+        isLoading: appState.isLibraryLoading,
+        onRefresh: appState.refreshSongs,
+        onSync: appState.syncNow,
+      ),
+      const SizedBox(height: 14),
+      TextField(
+        controller: _searchController,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _query.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Clear search',
+                  onPressed: _searchController.clear,
+                  icon: const Icon(Icons.close),
+                ),
+          labelText: 'Search library',
+          hintText: 'Title or artist',
+        ),
+      ),
+      const SizedBox(height: 16),
+      if (appState.isLibraryLoading) const LinearProgressIndicator(),
+      if (appState.isLibraryLoading) const SizedBox(height: 12),
+      if (appState.lastErrorMessage != null)
+        _InlineMessage(
+          icon: Icons.warning_amber_outlined,
+          title: 'Library needs attention',
+          message: appState.lastErrorMessage!,
+          actionLabel: 'Retry',
+          onAction: appState.refreshSongs,
+        ),
+    ];
+
+    if (index >= items.length) {
+      return null;
+    }
+    return items[index];
   }
 
   List<Song> _filterSongs(List<Song> songs) {

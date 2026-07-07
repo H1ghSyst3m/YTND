@@ -10,8 +10,9 @@ import 'package:ytnd/state/app_state.dart';
 
 import 'fakes.dart';
 
-const _connectivityChannel =
-    MethodChannel('dev.fluttercommunity.plus/connectivity');
+const _connectivityChannel = MethodChannel(
+  'dev.fluttercommunity.plus/connectivity',
+);
 
 const _signedInSettings = AppSettings(
   serverUrl: 'http://ytnd.local:8080',
@@ -43,40 +44,45 @@ AppState _buildState({
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
 
-  test('initialize keeps server editable when saved server is unreachable',
-      () async {
-    final settings = FakeSettingsService(
-      settings: const AppSettings(
-        serverUrl: 'http://ytnd.local:8080',
-        username: 'demo',
-        password: 'secret',
-        userId: 'u1',
-        sessionCookie: 'ytnd_uid=u1; ytnd_sig=sig',
-        storagePath: 'test-storage',
-      ),
-    );
-    final api = FakeApiService()
-      ..pingError = const ApiException(
-        kind: ApiErrorKind.network,
-        message:
-            'Cannot reach the server. Check the address and your network connection.',
+  test(
+    'initialize keeps server editable when saved server is unreachable',
+    () async {
+      final settings = FakeSettingsService(
+        settings: const AppSettings(
+          serverUrl: 'http://ytnd.local:8080',
+          username: 'demo',
+          password: 'secret',
+          userId: 'u1',
+          sessionCookie: 'ytnd_uid=u1; ytnd_sig=sig',
+          storagePath: 'test-storage',
+        ),
       );
-    final state = _buildState(settingsService: settings, apiService: api);
+      final api = FakeApiService()
+        ..pingError = const ApiException(
+          kind: ApiErrorKind.network,
+          message:
+              'Cannot reach the server. Check the address and your network connection.',
+        );
+      final state = _buildState(settingsService: settings, apiService: api);
 
-    await state.initialize();
+      await state.initialize();
 
-    expect(state.initialized, isTrue);
-    expect(state.settings.serverUrl, 'http://ytnd.local:8080');
-    expect(state.connectionStatus, ConnectionStatus.unreachable);
-    expect(state.connectionMessage, contains('Cannot reach the server'));
-  });
+      expect(state.initialized, isTrue);
+      expect(state.settings.serverUrl, 'http://ytnd.local:8080');
+      expect(state.connectionStatus, ConnectionStatus.unreachable);
+      expect(state.connectionMessage, contains('Cannot reach the server'));
+    },
+  );
 
   test('initial shared links are persisted while signed out', () async {
     final settings = FakeSettingsService();
-    final share =
-        FakeShareIntentService(initialUrls: const ['https://youtu.be/abc123']);
-    final state =
-        _buildState(settingsService: settings, shareIntentService: share);
+    final share = FakeShareIntentService(
+      initialUrls: const ['https://youtu.be/abc123'],
+    );
+    final state = _buildState(
+      settingsService: settings,
+      shareIntentService: share,
+    );
 
     await state.initialize();
 
@@ -106,42 +112,77 @@ void main() {
     expect(state.connectionStatus, ConnectionStatus.connected);
   });
 
-  test('failed login keeps the edited server saved and marks it unreachable',
-      () async {
-    final settings = FakeSettingsService(
-      settings: const AppSettings(
-        serverUrl: 'http://old.local',
-        username: 'demo',
-        password: 'secret',
-        userId: 'u1',
-        sessionCookie: 'cookie',
-        storagePath: 'test-storage',
-      ),
-    );
-    final api = FakeApiService()
-      ..loginError = const ApiException(
-        kind: ApiErrorKind.network,
-        message:
-            'Cannot reach the server. Check the address and your network connection.',
+  test(
+    'failed login with bad credentials shows invalid credentials copy',
+    () async {
+      final api = FakeApiService()
+        ..loginError = const ApiException(
+          kind: ApiErrorKind.unauthorized,
+          message: 'Username or password is incorrect.',
+          statusCode: 401,
+        );
+      final state = _buildState(apiService: api);
+      await state.initialize();
+
+      await expectLater(
+        state.login(
+          serverUrl: 'ytnd.local:8080',
+          username: 'demo',
+          password: 'wrong-secret',
+        ),
+        throwsA(isA<ApiException>()),
       );
-    final state = _buildState(settingsService: settings, apiService: api);
-    await state.initialize();
 
-    await expectLater(
-      state.login(
-        serverUrl: 'new.local:8080',
-        username: 'new-user',
-        password: 'new-secret',
-      ),
-      throwsA(isA<ApiException>()),
-    );
+      expect(state.connectionStatus, ConnectionStatus.invalidCredentials);
+      expect(state.connectionTitle, 'Invalid credentials');
+      expect(
+        state.connectionMessage,
+        'Check your username and password, then try again.',
+      );
+      expect(state.lastErrorMessage, 'Username or password is incorrect.');
+      expect(state.settings.userId, isEmpty);
+      expect(state.settings.sessionCookie, isEmpty);
+    },
+  );
 
-    expect(state.settings.serverUrl, 'http://new.local:8080');
-    expect(settings.settings.serverUrl, 'http://new.local:8080');
-    expect(state.settings.username, 'new-user');
-    expect(state.settings.userId, isEmpty);
-    expect(state.connectionStatus, ConnectionStatus.unreachable);
-  });
+  test(
+    'failed login keeps the edited server saved and marks it unreachable',
+    () async {
+      final settings = FakeSettingsService(
+        settings: const AppSettings(
+          serverUrl: 'http://old.local',
+          username: 'demo',
+          password: 'secret',
+          userId: 'u1',
+          sessionCookie: 'cookie',
+          storagePath: 'test-storage',
+        ),
+      );
+      final api = FakeApiService()
+        ..loginError = const ApiException(
+          kind: ApiErrorKind.network,
+          message:
+              'Cannot reach the server. Check the address and your network connection.',
+        );
+      final state = _buildState(settingsService: settings, apiService: api);
+      await state.initialize();
+
+      await expectLater(
+        state.login(
+          serverUrl: 'new.local:8080',
+          username: 'new-user',
+          password: 'new-secret',
+        ),
+        throwsA(isA<ApiException>()),
+      );
+
+      expect(state.settings.serverUrl, 'http://new.local:8080');
+      expect(settings.settings.serverUrl, 'http://new.local:8080');
+      expect(state.settings.username, 'new-user');
+      expect(state.settings.userId, isEmpty);
+      expect(state.connectionStatus, ConnectionStatus.unreachable);
+    },
+  );
 
   test('session restore auth failure expires the saved session', () async {
     final settings = FakeSettingsService(settings: _signedInSettings);
@@ -165,9 +206,7 @@ void main() {
   });
 
   test('websocket download errors do not expose raw backend text', () async {
-    final settings = FakeSettingsService(
-      settings: _signedInSettings,
-    );
+    final settings = FakeSettingsService(settings: _signedInSettings);
     final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
     final websocket = FakeWebsocketService();
     final state = _buildState(
@@ -214,24 +253,23 @@ void main() {
     ApiErrorKind.server,
     ApiErrorKind.invalidRequest,
   ]) {
-    test('operation error $kind preserves the global connection state',
-        () async {
-      final settings = FakeSettingsService(settings: _signedInSettings);
-      final api = FakeApiService()
-        ..addError = ApiException(
-          kind: kind,
-          message: 'Operation failed.',
-        );
-      final state = _buildState(settingsService: settings, apiService: api);
-      await state.initialize();
+    test(
+      'operation error $kind preserves the global connection state',
+      () async {
+        final settings = FakeSettingsService(settings: _signedInSettings);
+        final api = FakeApiService()
+          ..addError = ApiException(kind: kind, message: 'Operation failed.');
+        final state = _buildState(settingsService: settings, apiService: api);
+        await state.initialize();
 
-      final added = await state.addUrlsToQueue(['https://youtu.be/new123']);
+        final added = await state.addUrlsToQueue(['https://youtu.be/new123']);
 
-      expect(added, isFalse);
-      expect(state.connectionStatus, ConnectionStatus.connected);
-      expect(state.lastErrorMessage, 'Operation failed.');
-      expect(state.statusMessage, 'Operation failed.');
-    });
+        expect(added, isFalse);
+        expect(state.connectionStatus, ConnectionStatus.connected);
+        expect(state.lastErrorMessage, 'Operation failed.');
+        expect(state.statusMessage, 'Operation failed.');
+      },
+    );
   }
 
   for (final kind in [ApiErrorKind.network, ApiErrorKind.timeout]) {
@@ -319,29 +357,34 @@ void main() {
     expect(websocket.connected, isFalse);
   });
 
-  test('saving a different server clears the session but keeps the new server',
-      () async {
-    final settings = FakeSettingsService(
-      settings: const AppSettings(
-        serverUrl: 'http://old.local',
-        username: 'demo',
-        password: 'secret',
-        userId: 'u1',
-        sessionCookie: 'cookie',
-        storagePath: 'test-storage',
-      ),
-    );
-    final state = _buildState(settingsService: settings);
-    await state.initialize();
+  test(
+    'saving a different server clears the session but keeps the new server',
+    () async {
+      final settings = FakeSettingsService(
+        settings: const AppSettings(
+          serverUrl: 'http://old.local',
+          username: 'demo',
+          password: 'secret',
+          userId: 'u1',
+          sessionCookie: 'cookie',
+          storagePath: 'test-storage',
+        ),
+      );
+      final state = _buildState(settingsService: settings);
+      await state.initialize();
 
-    await state.saveSettings(
-      state.settings.copyWith(
-          serverUrl: 'http://new.local', username: 'demo', password: 'secret'),
-    );
+      await state.saveSettings(
+        state.settings.copyWith(
+          serverUrl: 'http://new.local',
+          username: 'demo',
+          password: 'secret',
+        ),
+      );
 
-    expect(state.isAuthenticated, isFalse);
-    expect(state.settings.serverUrl, 'http://new.local');
-    expect(state.settings.userId, isEmpty);
-    expect(state.connectionStatus, ConnectionStatus.signedOut);
-  });
+      expect(state.isAuthenticated, isFalse);
+      expect(state.settings.serverUrl, 'http://new.local');
+      expect(state.settings.userId, isEmpty);
+      expect(state.connectionStatus, ConnectionStatus.signedOut);
+    },
+  );
 }
