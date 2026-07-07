@@ -48,7 +48,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _pickFolder() async {
-    final folder = await FilePicker.platform.getDirectoryPath();
+    final folder = await FilePicker.getDirectoryPath();
     if (folder != null && mounted) {
       setState(() => _storageController.text = folder);
     }
@@ -72,12 +72,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final saved = await appState.saveSettings(_buildSettings(appState));
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(saved ? 'Settings saved' : appState.statusMessage)),
+          SnackBar(
+            content: Text(saved ? 'Settings saved' : appState.statusMessage),
+          ),
         );
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(appState.statusMessage)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(appState.statusMessage)));
       }
     }
   }
@@ -93,12 +97,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(signedIn ? 'Connected to YTND' : appState.statusMessage)),
+          SnackBar(
+            content: Text(
+              signedIn ? 'Connected to YTND' : appState.statusMessage,
+            ),
+          ),
         );
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(appState.statusMessage)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(appState.statusMessage)));
       }
     }
   }
@@ -127,7 +137,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     keyboardType: TextInputType.url,
                     textInputAction: TextInputAction.next,
-                    validator: (value) => (value == null || value.trim().isEmpty) ? 'Server URL is required' : null,
+                    validator: (value) =>
+                        (value == null || value.trim().isEmpty)
+                        ? 'Server URL is required'
+                        : null,
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
@@ -137,7 +150,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       prefixIcon: Icon(Icons.person_outline),
                     ),
                     textInputAction: TextInputAction.next,
-                    validator: (value) => (value == null || value.trim().isEmpty) ? 'Username is required' : null,
+                    validator: (value) =>
+                        (value == null || value.trim().isEmpty)
+                        ? 'Username is required'
+                        : null,
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
@@ -146,13 +162,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock_outline),
                       suffixIcon: IconButton(
-                        tooltip: _obscurePassword ? 'Show password' : 'Hide password',
-                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
-                        icon: Icon(_obscurePassword ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                        tooltip: _obscurePassword
+                            ? 'Show password'
+                            : 'Hide password',
+                        onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword,
+                        ),
+                        icon: Icon(
+                          _obscurePassword
+                              ? Icons.visibility_outlined
+                              : Icons.visibility_off_outlined,
+                        ),
                       ),
                     ),
                     obscureText: _obscurePassword,
-                    validator: (value) => (value == null || value.isEmpty) ? 'Password is required' : null,
+                    validator: (value) => (value == null || value.isEmpty)
+                        ? 'Password is required'
+                        : null,
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -161,9 +187,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         child: FilledButton.icon(
                           onPressed: appState.isAuthenticating ? null : _signIn,
                           icon: appState.isAuthenticating
-                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
                               : const Icon(Icons.login),
-                          label: Text(appState.isAuthenticated ? 'Reconnect' : 'Sign in'),
+                          label: Text(
+                            appState.isAuthenticated ? 'Reconnect' : 'Sign in',
+                          ),
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -183,13 +217,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   DropdownButtonFormField<int>(
                     initialValue: _syncInterval,
-                    decoration: const InputDecoration(labelText: 'Background sync interval'),
+                    decoration: const InputDecoration(
+                      labelText: 'Background sync interval',
+                    ),
                     items: const [
                       DropdownMenuItem(value: 0, child: Text('Manual only')),
                       DropdownMenuItem(value: 1, child: Text('Every 1 hour')),
                       DropdownMenuItem(value: 2, child: Text('Every 2 hours')),
                       DropdownMenuItem(value: 6, child: Text('Every 6 hours')),
-                      DropdownMenuItem(value: 12, child: Text('Every 12 hours')),
+                      DropdownMenuItem(
+                        value: 12,
+                        child: Text('Every 12 hours'),
+                      ),
                     ],
                     onChanged: (value) {
                       if (value != null) setState(() => _syncInterval = value);
@@ -199,9 +238,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Sync only on WiFi'),
-                    subtitle: _syncInterval == 0 ? const Text('Not used for manual sync') : null,
+                    subtitle: _syncInterval == 0
+                        ? const Text('Not used for manual sync')
+                        : null,
                     value: _syncWifiOnly,
-                    onChanged: _syncInterval == 0 ? null : (value) => setState(() => _syncWifiOnly = value),
+                    onChanged: _syncInterval == 0
+                        ? null
+                        : (value) => setState(() => _syncWifiOnly = value),
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
@@ -211,7 +254,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       helperText: 'Default: /storage/emulated/0/Music/YTND',
                       prefixIcon: Icon(Icons.folder_outlined),
                     ),
-                    validator: (value) => (value == null || value.trim().isEmpty) ? 'Storage path is required' : null,
+                    validator: (value) =>
+                        (value == null || value.trim().isEmpty)
+                        ? 'Storage path is required'
+                        : null,
                   ),
                   const SizedBox(height: 10),
                   Row(
@@ -228,7 +274,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         child: FilledButton.icon(
                           onPressed: appState.isSavingSettings ? null : _save,
                           icon: appState.isSavingSettings
-                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
                               : const Icon(Icons.save),
                           label: const Text('Save'),
                         ),
@@ -243,10 +295,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: 'Pending shared links',
                   icon: Icons.pending_actions,
                   children: [
-                    Text('${appState.pendingShareCount} link(s) will be added after sign-in.'),
+                    Text(
+                      '${appState.pendingShareCount} link(s) will be added after sign-in.',
+                    ),
                     const SizedBox(height: 10),
                     FilledButton.icon(
-                      onPressed: appState.isAuthenticated && !appState.isAddingToQueue
+                      onPressed:
+                          appState.isAuthenticated && !appState.isAddingToQueue
                           ? appState.retryPendingShareUrls
                           : null,
                       icon: const Icon(Icons.playlist_add),
@@ -270,6 +325,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 }
+
 class _ConnectionCard extends StatelessWidget {
   const _ConnectionCard({required this.appState});
 
@@ -295,11 +351,16 @@ class _ConnectionCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(appState.connectionTitle, style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  appState.connectionTitle,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 3),
                 Text(
                   appState.connectionMessage,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -349,7 +410,11 @@ class _ConnectionCard extends StatelessWidget {
 }
 
 class _SettingsSection extends StatelessWidget {
-  const _SettingsSection({required this.title, required this.icon, required this.children});
+  const _SettingsSection({
+    required this.title,
+    required this.icon,
+    required this.children,
+  });
 
   final String title;
   final IconData icon;

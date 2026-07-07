@@ -106,7 +106,8 @@ void main() {
     expect(state.connectionStatus, ConnectionStatus.connected);
   });
 
-  test('failed login keeps the edited server saved and reachable', () async {
+  test('failed login keeps the edited server saved and marks it unreachable',
+      () async {
     final settings = FakeSettingsService(
       settings: const AppSettings(
         serverUrl: 'http://old.local',
@@ -140,6 +141,27 @@ void main() {
     expect(state.settings.username, 'new-user');
     expect(state.settings.userId, isEmpty);
     expect(state.connectionStatus, ConnectionStatus.unreachable);
+  });
+
+  test('session restore auth failure expires the saved session', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService()
+      ..pingError = const ApiException(
+        kind: ApiErrorKind.unauthorized,
+        message: 'Your session expired. Sign in again.',
+        statusCode: 401,
+      );
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    expect(state.isAuthenticated, isFalse);
+    expect(state.connectionStatus, ConnectionStatus.unauthorized);
+    expect(state.settings.userId, isEmpty);
+    expect(state.settings.sessionCookie, isEmpty);
+    expect(settings.settings.userId, isEmpty);
+    expect(settings.settings.sessionCookie, isEmpty);
+    expect(state.lastErrorMessage, 'Your session expired. Sign in again.');
   });
 
   test('websocket download errors do not expose raw backend text', () async {

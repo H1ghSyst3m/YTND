@@ -29,17 +29,29 @@ Future<void> main() async {
 
 class YtndApp extends StatelessWidget {
   const YtndApp({
-    super.key,
+    Key? key,
     required ApiService apiService,
     required BackgroundSyncService backgroundSyncService,
     required WebsocketService websocketService,
     SettingsService? settingsService,
     ShareIntentService? shareIntentService,
-  })  : _apiService = apiService,
-        _backgroundSyncService = backgroundSyncService,
-        _websocketService = websocketService,
-        _settingsService = settingsService,
-        _shareIntentService = shareIntentService;
+  }) : this._(
+         key: key,
+         apiService: apiService,
+         backgroundSyncService: backgroundSyncService,
+         websocketService: websocketService,
+         settingsService: settingsService,
+         shareIntentService: shareIntentService,
+       );
+
+  const YtndApp._({
+    super.key,
+    required this._apiService,
+    required this._backgroundSyncService,
+    required this._websocketService,
+    this._settingsService,
+    this._shareIntentService,
+  });
 
   factory YtndApp.withDefaults({Key? key}) {
     return YtndApp(

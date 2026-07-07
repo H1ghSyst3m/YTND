@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -52,10 +51,7 @@ class BackgroundSyncService {
     if (!Platform.isAndroid) {
       return Future.value();
     }
-    return Workmanager().initialize(
-      callbackDispatcher,
-      isInDebugMode: kDebugMode,
-    );
+    return Workmanager().initialize(callbackDispatcher);
   }
 
   Future<void> configure(AppSettings settings) async {
@@ -79,9 +75,11 @@ class BackgroundSyncService {
       backgroundSyncUniqueName,
       backgroundSyncTaskName,
       frequency: frequency,
-      existingWorkPolicy: ExistingWorkPolicy.replace,
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.replace,
       constraints: Constraints(
-        networkType: settings.syncWifiOnly ? NetworkType.unmetered : NetworkType.connected,
+        networkType: settings.syncWifiOnly
+            ? NetworkType.unmetered
+            : NetworkType.connected,
       ),
       initialDelay: const Duration(minutes: 5),
     );

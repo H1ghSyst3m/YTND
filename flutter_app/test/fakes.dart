@@ -46,8 +46,11 @@ class FakeApiService extends ApiService {
   Object? loginError;
   Object? pingError;
   Object? addError;
+  Object? deleteError;
+  Object? redownloadError;
   List<Song> songs = const [];
   List<String> queue = [];
+  List<Song> redownloadedSongs = [];
 
   @override
   Future<(String userId, String cookieHeader)> login({
@@ -135,6 +138,35 @@ class FakeApiService extends ApiService {
   }
 
   @override
+  Future<void> deleteSong({
+    required String serverUrl,
+    required String userId,
+    required Song song,
+    required String cookieHeader,
+  }) async {
+    final error = deleteError;
+    if (error != null) {
+      throw error;
+    }
+    songs = songs.where((item) => !_isSameSong(item, song)).toList();
+  }
+
+  @override
+  Future<void> redownloadSong({
+    required String serverUrl,
+    required String userId,
+    required Song song,
+    required String cookieHeader,
+    bool force = false,
+  }) async {
+    final error = redownloadError;
+    if (error != null) {
+      throw error;
+    }
+    redownloadedSongs = [...redownloadedSongs, song];
+  }
+
+  @override
   Future<void> downloadSong({
     required String serverUrl,
     required String userId,
@@ -142,6 +174,13 @@ class FakeApiService extends ApiService {
     required String cookieHeader,
     required File targetFile,
   }) async {}
+
+  bool _isSameSong(Song a, Song b) {
+    if (b.id != null && b.id!.isNotEmpty) {
+      return a.id == b.id;
+    }
+    return a.title == b.title && a.artist == b.artist;
+  }
 }
 
 class FakeBackgroundSyncService extends BackgroundSyncService {

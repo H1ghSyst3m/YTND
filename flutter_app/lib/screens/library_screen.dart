@@ -33,11 +33,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   Future<void> _confirmDelete(BuildContext context, Song song) async {
     final appState = context.read<AppState>();
-    final yes = await showDialog<bool>(
+    final yes =
+        await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Delete song?'),
-            content: Text('Delete "${song.title}" by ${song.artist} from the server and local storage?'),
+            content: Text(
+              'Delete "${song.title}" by ${song.artist} from the server and local storage?',
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(false),
@@ -60,7 +63,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final deleted = await appState.deleteSong(song);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(deleted ? 'Deleted ${song.title}' : appState.statusMessage)),
+        SnackBar(
+          content: Text(
+            deleted ? 'Deleted ${song.title}' : appState.statusMessage,
+          ),
+        ),
       );
     }
   }
@@ -70,7 +77,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final queued = await appState.redownloadSong(song);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(queued ? 'Queued ${song.title} for redownload' : appState.statusMessage)),
+        SnackBar(
+          content: Text(
+            queued
+                ? 'Queued ${song.title} for redownload'
+                : appState.statusMessage,
+          ),
+        ),
       );
     }
   }
@@ -152,13 +165,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (_query.isEmpty) {
       return songs;
     }
-    return songs.where((song) {
-      final title = song.title.toLowerCase();
-      final artist = song.artist.toLowerCase();
-      return title.contains(_query) || artist.contains(_query);
-    }).toList(growable: false);
+    return songs
+        .where((song) {
+          final title = song.title.toLowerCase();
+          final artist = song.artist.toLowerCase();
+          return title.contains(_query) || artist.contains(_query);
+        })
+        .toList(growable: false);
   }
 }
+
 class _LibraryHeader extends StatelessWidget {
   const _LibraryHeader({
     required this.songCount,
@@ -199,18 +215,28 @@ class _LibraryHeader extends StatelessWidget {
                   color: scheme.primaryContainer,
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(Icons.library_music, color: scheme.onPrimaryContainer),
+                child: Icon(
+                  Icons.library_music,
+                  color: scheme.onPrimaryContainer,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Your synced library', style: Theme.of(context).textTheme.titleLarge),
+                    Text(
+                      'Your synced library',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
                     const SizedBox(height: 2),
                     Text(
-                      visibleCount == songCount ? '$songCount songs' : '$visibleCount of $songCount songs',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                      visibleCount == songCount
+                          ? '$songCount songs'
+                          : '$visibleCount of $songCount songs',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -280,14 +306,22 @@ class _SongTile extends StatelessWidget {
             Row(
               children: [
                 Icon(
-                  song.fileAvailable ? Icons.offline_pin_outlined : Icons.hourglass_bottom,
+                  song.fileAvailable
+                      ? Icons.offline_pin_outlined
+                      : Icons.hourglass_bottom,
                   size: 15,
-                  color: song.fileAvailable ? scheme.secondary : scheme.tertiary,
+                  color: song.fileAvailable
+                      ? scheme.secondary
+                      : scheme.tertiary,
                 ),
                 const SizedBox(width: 4),
                 Text(
-                  song.fileAvailable ? 'Available locally' : 'Processing or missing file',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+                  song.fileAvailable
+                      ? 'Available locally'
+                      : 'Processing or missing file',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -338,7 +372,10 @@ class _SongCover extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     if (coverUrl == null) {
-      return _FallbackCover(color: scheme.primaryContainer, iconColor: scheme.onPrimaryContainer);
+      return _FallbackCover(
+        color: scheme.primaryContainer,
+        iconColor: scheme.onPrimaryContainer,
+      );
     }
 
     return ClipRRect(
@@ -348,7 +385,7 @@ class _SongCover extends StatelessWidget {
         width: _size,
         height: _size,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _FallbackCover(
+        errorBuilder: (_, _, _) => _FallbackCover(
           color: scheme.surfaceContainerHighest,
           iconColor: scheme.onSurfaceVariant,
         ),
@@ -362,7 +399,8 @@ class _SongCover extends StatelessWidget {
                 strokeWidth: 2,
                 value: progress.expectedTotalBytes == null
                     ? null
-                    : progress.cumulativeBytesLoaded / progress.expectedTotalBytes!,
+                    : progress.cumulativeBytesLoaded /
+                          progress.expectedTotalBytes!,
               ),
             ),
           );
@@ -383,7 +421,10 @@ class _FallbackCover extends StatelessWidget {
     return Container(
       width: _SongCover._size,
       height: _SongCover._size,
-      decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(8)),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(8),
+      ),
       child: Icon(Icons.music_note, color: iconColor),
     );
   }
@@ -402,16 +443,23 @@ class _LockedState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.lock_outline, size: 48, color: Theme.of(context).colorScheme.tertiary),
+            Icon(
+              Icons.lock_outline,
+              size: 48,
+              color: Theme.of(context).colorScheme.tertiary,
+            ),
             const SizedBox(height: 16),
-            Text('Connect your YTND server', style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              'Connect your YTND server',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 8),
             Text(
               'Your library appears here after the server is reachable and you are signed in.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 18),
             FilledButton.icon(
@@ -446,11 +494,13 @@ class _EmptyLibrary extends StatelessWidget {
           Text(hasQuery ? 'No songs match your search' : 'No songs synced yet'),
           const SizedBox(height: 6),
           Text(
-            hasQuery ? 'Try a different title or artist.' : 'Share a YouTube link to YTND or add one from Queue.',
+            hasQuery
+                ? 'Try a different title or artist.'
+                : 'Share a YouTube link to YTND or add one from Queue.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),

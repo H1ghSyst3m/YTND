@@ -33,12 +33,23 @@ class AppState extends ChangeNotifier {
     required BackgroundSyncService backgroundSyncService,
     required WebsocketService websocketService,
     required ShareIntentService shareIntentService,
-  })  : _settingsService = settingsService,
-        _apiService = apiService,
-        _syncService = syncService,
-        _backgroundSyncService = backgroundSyncService,
-        _websocketService = websocketService,
-        _shareIntentService = shareIntentService;
+  }) : this._(
+         settingsService: settingsService,
+         apiService: apiService,
+         syncService: syncService,
+         backgroundSyncService: backgroundSyncService,
+         websocketService: websocketService,
+         shareIntentService: shareIntentService,
+       );
+
+  AppState._({
+    required this._settingsService,
+    required this._apiService,
+    required this._syncService,
+    required this._backgroundSyncService,
+    required this._websocketService,
+    required this._shareIntentService,
+  });
 
   final SettingsService _settingsService;
   final ApiService _apiService;
@@ -187,7 +198,8 @@ class AppState extends ChangeNotifier {
     try {
       final normalizedServerUrl = normalizeServerUrl(serverUrl);
       final normalizedUsername = username.trim();
-      final accountChanged = normalizedServerUrl != _settings.serverUrl ||
+      final accountChanged =
+          normalizedServerUrl != _settings.serverUrl ||
           normalizedUsername != _settings.username ||
           password != _settings.password;
 
@@ -279,7 +291,8 @@ class AppState extends ChangeNotifier {
           ? ''
           : normalizeServerUrl(newSettings.serverUrl);
       var next = newSettings.copyWith(serverUrl: normalizedServerUrl);
-      final accountChanged = normalizedServerUrl != _settings.serverUrl ||
+      final accountChanged =
+          normalizedServerUrl != _settings.serverUrl ||
           next.username != _settings.username ||
           next.password != _settings.password;
 
@@ -513,13 +526,17 @@ class AppState extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('Redownload failed: $e\n$st');
       await _handleOperationFailure(
-          e, 'Could not queue this song for redownload.');
+        e,
+        'Could not queue this song for redownload.',
+      );
       return false;
     }
   }
 
-  Future<bool> addUrlsToQueue(List<String> urls,
-      {bool fromShare = false}) async {
+  Future<bool> addUrlsToQueue(
+    List<String> urls, {
+    bool fromShare = false,
+  }) async {
     final normalized = _uniqueUrls(urls);
     if (normalized.isEmpty) {
       _statusMessage = 'No valid YouTube links found.';
@@ -709,6 +726,12 @@ class AppState extends ChangeNotifier {
       await retryPendingShareUrls();
     } catch (e, st) {
       debugPrint('Session restore failed: $e\n$st');
+      if (e is ApiException && e.isAuthFailure) {
+        await _expireSession(
+          _messageFor(e, 'Your session expired. Sign in again.'),
+        );
+        return;
+      }
       _isAuthenticated = hasSavedSession;
       _connectionStatus = _statusForError(e);
       _lastErrorMessage = _messageFor(e, 'Could not reach your YTND server.');
@@ -762,7 +785,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> _handleOperationFailure(
-      Object error, String fallbackMessage) async {
+    Object error,
+    String fallbackMessage,
+  ) async {
     final message = _messageFor(error, fallbackMessage);
     _lastErrorMessage = message;
     _statusMessage = message;
@@ -888,10 +913,12 @@ class AppState extends ChangeNotifier {
         if (url == null || url.isEmpty) {
           return;
         }
-        final existingIndex =
-            _downloadQueue.indexWhere((item) => item.url == url);
-        final index =
-            existingIndex >= 0 ? existingIndex : _downloadQueue.length;
+        final existingIndex = _downloadQueue.indexWhere(
+          (item) => item.url == url,
+        );
+        final index = existingIndex >= 0
+            ? existingIndex
+            : _downloadQueue.length;
         if (existingIndex < 0) {
           _downloadQueue = [..._downloadQueue, DownloadQueueItem(url: url)];
         }
@@ -905,12 +932,15 @@ class AppState extends ChangeNotifier {
           title: data['title']?.toString(),
           artist: data['artist']?.toString(),
           id: data['id']?.toString(),
-          percentage:
-              num.tryParse(data['percentage']?.toString() ?? '')?.toDouble(),
-          downloadedBytes:
-              num.tryParse(data['downloaded_bytes']?.toString() ?? '')?.toInt(),
-          totalBytes:
-              num.tryParse(data['total_bytes']?.toString() ?? '')?.toInt(),
+          percentage: num.tryParse(
+            data['percentage']?.toString() ?? '',
+          )?.toDouble(),
+          downloadedBytes: num.tryParse(
+            data['downloaded_bytes']?.toString() ?? '',
+          )?.toInt(),
+          totalBytes: num.tryParse(
+            data['total_bytes']?.toString() ?? '',
+          )?.toInt(),
           error: error,
         );
         _downloadQueue = [
