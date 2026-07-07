@@ -34,7 +34,8 @@ class ApiException implements Exception {
   final int? statusCode;
   final String? details;
 
-  bool get isAuthFailure => kind == ApiErrorKind.unauthorized || kind == ApiErrorKind.forbidden;
+  bool get isAuthFailure =>
+      kind == ApiErrorKind.unauthorized || kind == ApiErrorKind.forbidden;
 
   @override
   String toString() => message;
@@ -64,7 +65,9 @@ String normalizeServerUrl(String value) {
       message: 'Server URL must start with http:// or https://.',
     );
   }
-  return normalized.endsWith('/') ? normalized.substring(0, normalized.length - 1) : normalized;
+  return normalized.endsWith('/')
+      ? normalized.substring(0, normalized.length - 1)
+      : normalized;
 }
 
 class ApiService {
@@ -90,13 +93,15 @@ class ApiService {
     } on SocketException catch (e) {
       throw ApiException(
         kind: ApiErrorKind.network,
-        message: 'Cannot reach the server. Check the address and your network connection.',
+        message:
+            'Cannot reach the server. Check the address and your network connection.',
         details: e.message,
       );
     } on HandshakeException catch (e) {
       throw ApiException(
         kind: ApiErrorKind.network,
-        message: 'The secure connection failed. Check the server certificate or use the correct URL.',
+        message:
+            'The secure connection failed. Check the server certificate or use the correct URL.',
         details: e.message,
       );
     } on FormatException catch (e) {
@@ -138,15 +143,16 @@ class ApiService {
     try {
       final decoded = jsonDecode(body);
       if (decoded is Map<String, dynamic>) {
-        final detail = decoded['detail'] ?? decoded['message'] ?? decoded['error'];
+        final detail =
+            decoded['detail'] ?? decoded['message'] ?? decoded['error'];
         if (detail != null) {
           return detail.toString();
         }
       }
     } catch (_) {
-      // Fall through to a short plain-text detail for diagnostics.
+      // Plain-text bodies stay in ApiException.details, not user-facing copy.
     }
-    return body.length > 240 ? '${body.substring(0, 240)}...' : body;
+    return '';
   }
 
   ApiException _httpError({
@@ -182,7 +188,7 @@ class ApiService {
         return ApiException(
           kind: ApiErrorKind.notFound,
           statusCode: statusCode,
-          message: message.isEmpty ? 'The requested item was not found.' : message,
+          message: message,
           details: body,
         );
       case 409:
@@ -196,7 +202,9 @@ class ApiService {
         return ApiException(
           kind: statusCode >= 500 ? ApiErrorKind.server : ApiErrorKind.unknown,
           statusCode: statusCode,
-          message: statusCode >= 500 ? 'The server had a problem. Try again later.' : message,
+          message: statusCode >= 500
+              ? 'The server had a problem. Try again later.'
+              : message,
           details: body,
         );
     }
@@ -223,8 +231,13 @@ class ApiService {
     required String password,
   }) {
     return _withClient((client) async {
-      final request = await client.postUrl(_uri(serverUrl, '/api/login')).timeout(_kRequestTimeout);
-      request.headers.set(HttpHeaders.contentTypeHeader, 'application/x-www-form-urlencoded');
+      final request = await client
+          .postUrl(_uri(serverUrl, '/api/login'))
+          .timeout(_kRequestTimeout);
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'application/x-www-form-urlencoded',
+      );
       final form = Uri(
         queryParameters: <String, String>{
           'username': username,
@@ -246,7 +259,8 @@ class ApiService {
         );
       }
 
-      final setCookies = response.headers[HttpHeaders.setCookieHeader] ?? const <String>[];
+      final setCookies =
+          response.headers[HttpHeaders.setCookieHeader] ?? const <String>[];
       final cookieParts = <String>[];
       for (final cookieLine in setCookies) {
         final token = cookieLine.split(';').first.trim();
@@ -265,12 +279,11 @@ class ApiService {
     });
   }
 
-  Future<bool> ping({
-    required String serverUrl,
-    required String cookieHeader,
-  }) {
+  Future<bool> ping({required String serverUrl, required String cookieHeader}) {
     return _withClient((client) async {
-      final request = await client.getUrl(_uri(serverUrl, '/api/ping')).timeout(_kRequestTimeout);
+      final request = await client
+          .getUrl(_uri(serverUrl, '/api/ping'))
+          .timeout(_kRequestTimeout);
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
       final response = await request.close().timeout(_kRequestTimeout);
       final body = await _readBody(response);
@@ -307,7 +320,10 @@ class ApiService {
     required String userId,
     required String filename,
   }) {
-    return _uri(serverUrl, '/api/cover', {'user_id': userId, 'filename': filename});
+    return _uri(serverUrl, '/api/cover', {
+      'user_id': userId,
+      'filename': filename,
+    });
   }
 
   Future<void> deleteSong({
@@ -325,7 +341,9 @@ class ApiService {
         query['artist'] = song.artist;
       }
 
-      final request = await client.deleteUrl(_uri(serverUrl, '/api/songs', query)).timeout(_kRequestTimeout);
+      final request = await client
+          .deleteUrl(_uri(serverUrl, '/api/songs', query))
+          .timeout(_kRequestTimeout);
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
       final response = await request.close().timeout(_kRequestTimeout);
       final body = await _readBody(response);
@@ -351,11 +369,17 @@ class ApiService {
         query['title'] = song.title;
         query['artist'] = song.artist;
       }
-      final request = await client.postUrl(_uri(serverUrl, '/api/redownload', query)).timeout(_kRequestTimeout);
+      final request = await client
+          .postUrl(_uri(serverUrl, '/api/redownload', query))
+          .timeout(_kRequestTimeout);
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
       final response = await request.close().timeout(_kRequestTimeout);
       final body = await _readBody(response);
-      _throwIfNotOk(response, body, 'Could not queue this song for redownload.');
+      _throwIfNotOk(
+        response,
+        body,
+        'Could not queue this song for redownload.',
+      );
     });
   }
 
@@ -368,10 +392,12 @@ class ApiService {
   }) {
     return _withClient((client) async {
       final request = await client
-          .getUrl(_uri(serverUrl, '/api/download', {
-            'user_id': userId,
-            'filename': filename,
-          }))
+          .getUrl(
+            _uri(serverUrl, '/api/download', {
+              'user_id': userId,
+              'filename': filename,
+            }),
+          )
           .timeout(_kRequestTimeout);
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
       final response = await request.close().timeout(_kRequestTimeout);
@@ -417,7 +443,9 @@ class ApiService {
       final body = await _readBody(response);
       _throwIfNotOk(response, body, 'Could not load the queue.');
       final jsonMap = _jsonObject(body);
-      return (jsonMap['queue'] as List<dynamic>? ?? const <dynamic>[]).whereType<String>().toList();
+      return (jsonMap['queue'] as List<dynamic>? ?? const <dynamic>[])
+          .whereType<String>()
+          .toList();
     });
   }
 
@@ -432,7 +460,10 @@ class ApiService {
           .postUrl(_uri(serverUrl, '/api/queue', {'user_id': userId}))
           .timeout(_kRequestTimeout);
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
-      request.headers.set(HttpHeaders.contentTypeHeader, ContentType.json.value);
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        ContentType.json.value,
+      );
       request.add(utf8.encode(jsonEncode({'urls': urls})));
       final response = await request.close().timeout(_kRequestTimeout);
       final body = await _readBody(response);
@@ -452,7 +483,10 @@ class ApiService {
           .timeout(_kRequestTimeout);
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
       if (urls != null && urls.isNotEmpty) {
-        request.headers.set(HttpHeaders.contentTypeHeader, ContentType.json.value);
+        request.headers.set(
+          HttpHeaders.contentTypeHeader,
+          ContentType.json.value,
+        );
         request.add(utf8.encode(jsonEncode({'urls': urls})));
       }
       final response = await request.close().timeout(_kRequestTimeout);
@@ -471,7 +505,10 @@ class ApiService {
           .postUrl(_uri(serverUrl, '/api/queue/process', {'user_id': userId}))
           .timeout(_kRequestTimeout);
       request.headers.set(HttpHeaders.cookieHeader, cookieHeader);
-      request.headers.set(HttpHeaders.contentTypeHeader, ContentType.json.value);
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        ContentType.json.value,
+      );
       request.add(utf8.encode('{}'));
       final response = await request.close().timeout(_kRequestTimeout);
       final body = await _readBody(response);

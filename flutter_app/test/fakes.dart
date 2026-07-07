@@ -62,19 +62,14 @@ class FakeApiService extends ApiService {
     if (error != null) {
       throw error;
     }
-    if (serverUrl.contains('fail-login')) {
-      throw const ApiException(
-        kind: ApiErrorKind.unauthorized,
-        message: 'Username or password is incorrect.',
-        statusCode: 401,
-      );
-    }
     return ('u1', 'ytnd_uid=u1; ytnd_sig=sig');
   }
 
   @override
-  Future<bool> ping(
-      {required String serverUrl, required String cookieHeader}) async {
+  Future<bool> ping({
+    required String serverUrl,
+    required String cookieHeader,
+  }) async {
     final error = pingError;
     if (error != null) {
       throw error;
@@ -210,8 +205,10 @@ class FakeWebsocketService extends WebsocketService {
   Stream<WsEvent> get events => controller.stream;
 
   @override
-  Future<void> connect(
-      {required String serverUrl, required String cookieHeader}) async {
+  Future<void> connect({
+    required String serverUrl,
+    required String cookieHeader,
+  }) async {
     connected = true;
   }
 

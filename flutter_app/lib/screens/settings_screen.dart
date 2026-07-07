@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/app_settings.dart';
+import '../services/api_service.dart';
 import '../state/app_state.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -65,8 +66,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Future<bool> _confirmHttpServerIfNeeded() async {
+    late final String normalizedServerUrl;
+    try {
+      normalizedServerUrl = normalizeServerUrl(_serverController.text);
+    } on ApiException {
+      return true;
+    }
+
+    if (Uri.parse(normalizedServerUrl).scheme != 'http') {
+      return true;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Use HTTP server?'),
+        content: const Text(
+          'HTTP is not encrypted. Your username and password may be visible '
+          'on the network. Only continue for a trusted local server.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+
+    return confirmed ?? false;
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
+    if (!await _confirmHttpServerIfNeeded()) return;
+    if (!mounted) return;
     final appState = context.read<AppState>();
     try {
       final saved = await appState.saveSettings(_buildSettings(appState));
@@ -88,6 +127,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _signIn() async {
     if (!_formKey.currentState!.validate()) return;
+    if (!await _confirmHttpServerIfNeeded()) return;
+    if (!mounted) return;
     final appState = context.read<AppState>();
     try {
       final signedIn = await appState.login(

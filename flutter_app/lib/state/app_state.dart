@@ -26,6 +26,8 @@ enum ConnectionStatus {
   invalidCredentials,
 }
 
+enum QueueAddResult { added, deferred, failed }
+
 class AppState extends ChangeNotifier {
   AppState({
     required SettingsService settingsService,
@@ -541,7 +543,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<bool> addUrlsToQueue(
+  Future<QueueAddResult> addUrlsToQueue(
     List<String> urls, {
     bool fromShare = false,
   }) async {
@@ -549,7 +551,7 @@ class AppState extends ChangeNotifier {
     if (normalized.isEmpty) {
       _statusMessage = 'No valid YouTube links found.';
       notifyListeners();
-      return false;
+      return QueueAddResult.failed;
     }
 
     if (!_isAuthenticated) {
@@ -557,7 +559,7 @@ class AppState extends ChangeNotifier {
       _statusMessage = 'Saved ${normalized.length} link(s) until you sign in.';
       _queueFocusVersion++;
       notifyListeners();
-      return false;
+      return QueueAddResult.deferred;
     }
 
     _isAddingToQueue = true;
@@ -574,14 +576,14 @@ class AppState extends ChangeNotifier {
       _statusMessage = 'Added ${normalized.length} link(s) to the queue';
       _queueFocusVersion++;
       await refreshQueue();
-      return true;
+      return QueueAddResult.added;
     } catch (e, st) {
       debugPrint('Add queue failed: $e\n$st');
       if (fromShare) {
         await _storePendingShareUrls(normalized);
       }
       await _handleOperationFailure(e, 'Could not add the link to the queue.');
-      return false;
+      return QueueAddResult.failed;
     } finally {
       _isAddingToQueue = false;
       notifyListeners();

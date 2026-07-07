@@ -97,24 +97,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
         }
 
         final songs = _filterSongs(appState.songs);
+        final headerItems = _headerItems(appState, songs);
         return RefreshIndicator(
           onRefresh: appState.refreshSongs,
           child: ListView.builder(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-            itemCount:
-                _headerItemCount(appState) + (songs.isEmpty ? 1 : songs.length),
+            itemCount: headerItems.length + (songs.isEmpty ? 1 : songs.length),
             itemBuilder: (context, index) {
-              final header = _headerItemAt(appState, songs, index);
-              if (header != null) {
-                return header;
+              if (index < headerItems.length) {
+                return headerItems[index];
               }
 
               if (songs.isEmpty) {
                 return _EmptyLibrary(hasQuery: _query.isNotEmpty);
               }
 
-              final song = songs[index - _headerItemCount(appState)];
+              final song = songs[index - headerItems.length];
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: _SongTile(
@@ -132,14 +131,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
-  int _headerItemCount(AppState appState) {
-    return 4 +
-        (appState.isLibraryLoading ? 2 : 0) +
-        (appState.lastErrorMessage != null ? 1 : 0);
-  }
-
-  Widget? _headerItemAt(AppState appState, List<Song> songs, int index) {
-    final items = <Widget>[
+  List<Widget> _headerItems(AppState appState, List<Song> songs) {
+    return [
       _LibraryHeader(
         songCount: appState.songs.length,
         visibleCount: songs.length,
@@ -177,11 +170,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
           onAction: appState.refreshSongs,
         ),
     ];
-
-    if (index >= items.length) {
-      return null;
-    }
-    return items[index];
   }
 
   List<Song> _filterSongs(List<Song> songs) {

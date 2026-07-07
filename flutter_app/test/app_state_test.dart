@@ -91,6 +91,19 @@ void main() {
     expect(state.connectionStatus, ConnectionStatus.setupRequired);
   });
 
+  test('manual queue add is deferred while signed out', () async {
+    final settings = FakeSettingsService();
+    final state = _buildState(settingsService: settings);
+    await state.initialize();
+
+    final result = await state.addUrlsToQueue(['https://youtu.be/new123']);
+
+    expect(result, QueueAddResult.deferred);
+    expect(state.pendingShareUrls, ['https://youtu.be/new123']);
+    expect(settings.pendingShareUrls, ['https://youtu.be/new123']);
+    expect(state.statusMessage, 'Saved 1 link(s) until you sign in.');
+  });
+
   test('login flushes pending shared links into the queue', () async {
     final settings = FakeSettingsService(
       pendingShareUrls: const ['https://youtu.be/abc123'],
@@ -262,9 +275,9 @@ void main() {
         final state = _buildState(settingsService: settings, apiService: api);
         await state.initialize();
 
-        final added = await state.addUrlsToQueue(['https://youtu.be/new123']);
+        final result = await state.addUrlsToQueue(['https://youtu.be/new123']);
 
-        expect(added, isFalse);
+        expect(result, QueueAddResult.failed);
         expect(state.connectionStatus, ConnectionStatus.connected);
         expect(state.lastErrorMessage, 'Operation failed.');
         expect(state.statusMessage, 'Operation failed.');
@@ -283,9 +296,9 @@ void main() {
       final state = _buildState(settingsService: settings, apiService: api);
       await state.initialize();
 
-      final added = await state.addUrlsToQueue(['https://youtu.be/new123']);
+      final result = await state.addUrlsToQueue(['https://youtu.be/new123']);
 
-      expect(added, isFalse);
+      expect(result, QueueAddResult.failed);
       expect(state.connectionStatus, ConnectionStatus.unreachable);
       expect(state.lastErrorMessage, 'Cannot reach the server.');
     });

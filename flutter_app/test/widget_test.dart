@@ -5,6 +5,7 @@ import 'package:ytnd/main.dart';
 import 'package:ytnd/models/app_settings.dart';
 import 'package:ytnd/models/song.dart';
 import 'package:ytnd/screens/library_screen.dart';
+import 'package:ytnd/screens/queue_screen.dart';
 import 'package:ytnd/services/sync_service.dart';
 import 'package:ytnd/state/app_state.dart';
 
@@ -88,5 +89,42 @@ void main() {
     expect(find.text('Song 79'), findsNothing);
     expect(state.coverUrlRequests, greaterThan(0));
     expect(state.coverUrlRequests, lessThan(api.songs.length));
+  });
+
+  testWidgets('queue saves signed-out input for later and clears the field', (
+    tester,
+  ) async {
+    final settings = FakeSettingsService();
+    final api = FakeApiService();
+    final state = AppState(
+      settingsService: settings,
+      apiService: api,
+      syncService: SyncService(api),
+      backgroundSyncService: FakeBackgroundSyncService(),
+      websocketService: FakeWebsocketService(),
+      shareIntentService: FakeShareIntentService(),
+    );
+    await state.initialize();
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: const MaterialApp(home: Scaffold(body: QueueScreen())),
+      ),
+    );
+
+    await tester.enterText(
+      find.byType(TextField),
+      'https://youtu.be/deferred123',
+    );
+    await tester.tap(find.text('Save for sign-in'));
+    await tester.pumpAndSettle();
+
+    final input = tester.widget<EditableText>(find.byType(EditableText));
+    expect(input.controller.text, isEmpty);
+    expect(settings.pendingShareUrls, ['https://youtu.be/deferred123']);
+    expect(state.pendingShareUrls, ['https://youtu.be/deferred123']);
+    expect(find.text('Saved 1 link(s) until you sign in.'), findsOneWidget);
   });
 }

@@ -33,29 +33,36 @@ class _QueueScreenState extends State<QueueScreen> {
       return;
     }
 
-    final added = await appState.addUrlsToQueue(urls);
+    final result = await appState.addUrlsToQueue(urls);
     if (!mounted) return;
-    if (added) _urlController.clear();
+    final accepted = result != QueueAddResult.failed;
+    if (accepted) _urlController.clear();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-          content: Text(added
+        content: Text(
+          result == QueueAddResult.added
               ? 'Added ${urls.length} link(s) to the queue'
-              : appState.statusMessage)),
+              : appState.statusMessage,
+        ),
+      ),
     );
   }
 
   Future<void> _confirmClearQueue() async {
     final appState = context.read<AppState>();
-    final yes = await showDialog<bool>(
+    final yes =
+        await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Clear queue?'),
-            content:
-                const Text('Remove every waiting link from the server queue?'),
+            content: const Text(
+              'Remove every waiting link from the server queue?',
+            ),
             actions: [
               TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  child: const Text('Cancel')),
+                onPressed: () => Navigator.of(context).pop(false),
+                child: const Text('Cancel'),
+              ),
               FilledButton.icon(
                 onPressed: () => Navigator.of(context).pop(true),
                 icon: const Icon(Icons.clear_all),
@@ -161,16 +168,17 @@ class _QueueComposer extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Add YouTube links',
-                        style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      'Add YouTube links',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     Text(
                       isAuthenticated
                           ? 'Paste links here or share directly from YouTube.'
                           : 'Links are saved until you sign in.',
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodySmall
-                          ?.copyWith(color: scheme.onSurfaceVariant),
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -199,10 +207,12 @@ class _QueueComposer extends StatelessWidget {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.playlist_add),
                   label: Text(
-                      isAuthenticated ? 'Add to queue' : 'Save for sign-in'),
+                    isAuthenticated ? 'Add to queue' : 'Save for sign-in',
+                  ),
                 ),
               ),
               if (!isAuthenticated) ...[
@@ -254,8 +264,11 @@ class _PendingSharePanel extends StatelessWidget {
               Icon(Icons.pending_actions, color: scheme.tertiary),
               const SizedBox(width: 8),
               Expanded(
-                  child: Text('${urls.length} shared link(s) waiting',
-                      style: Theme.of(context).textTheme.titleSmall)),
+                child: Text(
+                  '${urls.length} shared link(s) waiting',
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
               TextButton.icon(
                 onPressed: isAuthenticated
                     ? (isAdding ? null : onAddPending)
@@ -266,27 +279,27 @@ class _PendingSharePanel extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          ...urls.take(3).map(
+          ...urls
+              .take(3)
+              .map(
                 (url) => Padding(
                   padding: const EdgeInsets.only(bottom: 4),
                   child: Text(
                     url,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(color: scheme.onSurfaceVariant),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ),
           if (urls.length > 3)
             Text(
               '+${urls.length - 3} more',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
         ],
       ),
@@ -334,7 +347,8 @@ class _QueueActions extends StatelessWidget {
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Icon(Icons.play_arrow),
             label: Text(isProcessing ? 'Processing' : 'Start'),
           ),
@@ -370,8 +384,9 @@ class _QueueItemTile extends StatelessWidget {
               width: 46,
               height: 46,
               decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8)),
+                color: statusColor.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+              ),
               child: Icon(_statusIcon(item.status), color: statusColor),
             ),
             const SizedBox(width: 12),
@@ -379,24 +394,34 @@ class _QueueItemTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(item.title ?? item.url,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleSmall),
+                  Text(
+                    item.title ?? item.url,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
                   if (item.title != null) ...[
                     const SizedBox(height: 2),
-                    Text(item.url,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(
+                      item.url,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ],
                   const SizedBox(height: 6),
-                  Text(_statusText(item),
-                      style: TextStyle(
-                          color: statusColor, fontWeight: FontWeight.w600)),
+                  Text(
+                    _statusText(item),
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                   if (item.status == DownloadStatus.downloading &&
                       item.percentage != null) ...[
                     const SizedBox(height: 8),
                     LinearProgressIndicator(
-                        value: (item.percentage! / 100).clamp(0.0, 1.0)),
+                      value: (item.percentage! / 100).clamp(0.0, 1.0),
+                    ),
                   ],
                 ],
               ),
@@ -474,8 +499,11 @@ class _EmptyQueue extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 48),
       child: Column(
         children: [
-          Icon(Icons.playlist_add_check,
-              size: 52, color: scheme.onSurfaceVariant),
+          Icon(
+            Icons.playlist_add_check,
+            size: 52,
+            color: scheme.onSurfaceVariant,
+          ),
           const SizedBox(height: 12),
           Text(isAuthenticated ? 'Queue is empty' : 'Queue is offline'),
           const SizedBox(height: 6),
@@ -484,10 +512,9 @@ class _EmptyQueue extends StatelessWidget {
                 ? 'Paste a link above or share from YouTube to start a download.'
                 : 'Sign in from Settings and pending links will be added automatically.',
             textAlign: TextAlign.center,
-            style: Theme.of(context)
-                .textTheme
-                .bodyMedium
-                ?.copyWith(color: scheme.onSurfaceVariant),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
       ),
