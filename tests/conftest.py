@@ -63,3 +63,44 @@ def user_folder(regular_user):
     (folder / "track.opus").write_bytes(b"FAKE_AUDIO")
     (folder / "forbidden.txt").write_text("nope", encoding="utf-8")
     return folder
+
+
+@pytest.fixture
+def fake_ytdlp(monkeypatch):
+    def install(module, *, extract_info=None, download=None):
+        captured = {}
+
+        def fake_build_options(base):
+            captured["base"] = base
+            opts = dict(base)
+            opts["sentinel"] = "shared"
+            return opts
+
+        class FakeYoutubeDL:
+            def __init__(self, opts):
+                captured["opts"] = opts
+                self.opts = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def extract_info(self, url, download_arg=None, **kwargs):
+                if "download" in kwargs:
+                    download_arg = kwargs["download"]
+                if extract_info:
+                    return extract_info(self, url, download_arg)
+                return {"id": "video123", "title": "Track"}
+
+            def download(self, urls):
+                if download:
+                    return download(self, urls)
+                return 0
+
+        monkeypatch.setattr(module, "build_ytdlp_options", fake_build_options)
+        monkeypatch.setattr(module.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+        return captured
+
+    return install

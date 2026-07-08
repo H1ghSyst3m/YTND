@@ -544,7 +544,13 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
 
 
 def _is_youtube_diagnostics_url(url: str) -> bool:
-    host = (urlparse(url).hostname or "").rstrip(".").lower()
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        host = (parsed.hostname or "").rstrip(".").lower()
+    except ValueError:
+        return False
     return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
 
 

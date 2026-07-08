@@ -2,21 +2,11 @@ from ytnd import manager_server
 from ytnd.manager_server import SESSION_SIG_COOKIE, SESSION_UID_COOKIE, _sign_uid
 
 
-def test_youtube_diagnostics_classifies_ytdlp_errors(client, admin_user, monkeypatch):
-    class FakeYoutubeDL:
-        def __init__(self, opts):
-            self.opts = opts
+def test_youtube_diagnostics_classifies_ytdlp_errors(client, admin_user, monkeypatch, fake_ytdlp):
+    def fake_extract(ydl, url, download):
+        raise manager_server.yt_dlp.utils.DownloadError("Sign in to confirm you’re not a bot")
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def extract_info(self, url, download):
-            raise manager_server.yt_dlp.utils.DownloadError("Sign in to confirm you’re not a bot")
-
-    monkeypatch.setattr(manager_server.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    fake_ytdlp(manager_server, extract_info=fake_extract)
     monkeypatch.setattr(manager_server, "_check_cookies_status", lambda: {"status": "auth_present"})
     monkeypatch.setattr(manager_server, "_check_ytdlp_status", lambda: {"status": "ok", "version": "test"})
 
@@ -55,42 +45,37 @@ def test_youtube_diagnostics_rejects_non_youtube_hosts(client, admin_user, monke
 
     monkeypatch.setattr(manager_server.yt_dlp, "YoutubeDL", fail_youtube_dl)
 
-    response = client.get(
-        "/api/system/youtube-diagnostics",
-        params={"url": "https://example.com/watch?v=video123"},
-        cookies={
-            SESSION_UID_COOKIE: admin_user["uid"],
-            SESSION_SIG_COOKIE: _sign_uid(admin_user["uid"]),
-        },
+    for url in (
+        "https://example.com/watch?v=video123",
+        "https://youtube.com.evil/watch?v=video123",
+        "https://notyoutube.com/watch?v=video123",
+        "ftp://youtube.com/watch?v=video123",
+        "youtube.com/watch?v=video123",
+        "http://[::1",
+    ):
+        response = client.get(
+            "/api/system/youtube-diagnostics",
+            params={"url": url},
+            cookies={
+                SESSION_UID_COOKIE: admin_user["uid"],
+                SESSION_SIG_COOKIE: _sign_uid(admin_user["uid"]),
+            },
+        )
+
+        assert response.status_code == 400
+
+
+def test_youtube_diagnostics_allows_http_and_https_youtube_hosts():
+    assert manager_server._is_youtube_diagnostics_url("https://youtube.com/watch?v=video123")
+    assert manager_server._is_youtube_diagnostics_url("http://www.youtube.com/watch?v=video123")
+    assert manager_server._is_youtube_diagnostics_url("https://youtu.be/video123")
+
+
+def test_probe_uses_shared_ytdlp_options(fake_ytdlp):
+    captured = fake_ytdlp(
+        manager_server,
+        extract_info=lambda ydl, url, download: {"id": "video123", "title": "Track"},
     )
-
-    assert response.status_code == 400
-
-
-def test_probe_uses_shared_ytdlp_options(monkeypatch):
-    captured = {}
-
-    def fake_build_options(base):
-        captured["base"] = base
-        opts = dict(base)
-        opts["sentinel"] = "shared"
-        return opts
-
-    class FakeYoutubeDL:
-        def __init__(self, opts):
-            captured["opts"] = opts
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def extract_info(self, url, download):
-            return {"id": "video123", "title": "Track"}
-
-    monkeypatch.setattr(manager_server, "build_ytdlp_options", fake_build_options)
-    monkeypatch.setattr(manager_server.yt_dlp, "YoutubeDL", FakeYoutubeDL)
 
     ok, reason = manager_server._probe_url_available("https://youtube.com/watch?v=video123")
 

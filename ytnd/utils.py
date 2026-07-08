@@ -42,6 +42,10 @@ def sanitize_filename(name: str) -> str:
         name = name.replace(bad, good)
     return _re_illegal.sub("", name).strip().rstrip(".")
 
+def _is_youtube_host(host: str) -> bool:
+    host = (host or "").split(":", 1)[0].rstrip(".").lower()
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
 def is_youtube_playlist_url(url: str) -> bool:
     """Check if URL is a YouTube playlist URL."""
     if not url or not isinstance(url, str):
@@ -55,14 +59,14 @@ def is_youtube_playlist_url(url: str) -> bool:
     except Exception:
         return False
     
-    host = (u.netloc or "").lower()
+    host = (u.hostname or u.netloc or "").lower()
     path = (u.path or "")
     qs = parse_qs(u.query)
     has_v = "v" in qs
     has_list = "list" in qs
-    if not any(h in host for h in ("youtube.com", "youtu.be")):
+    if not _is_youtube_host(host):
         return False
-    if path.startswith("/playlist"):
+    if path.startswith("/playlist") and host != "youtu.be":
         return True
     if host.endswith("youtu.be") and path.strip("/"):
         return False

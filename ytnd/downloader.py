@@ -29,10 +29,14 @@ if TYPE_CHECKING:
     from typing import Any
 
 AUDIO_EXTENSIONS = {".opus", ".mp3", ".m4a", ".flac", ".ogg"}
+MAX_DOWNLOAD_WORKERS = 8
 
 def _shorten(s: str, maxlen: int = 600) -> str:
     s = (s or "").strip()
     return s if len(s) <= maxlen else s[:maxlen] + " …"
+
+def _clamp_worker_count(workers: int) -> int:
+    return max(1, min(MAX_DOWNLOAD_WORKERS, workers))
 
 def _needs_android_client(stderr_out: str) -> bool:
     t = (stderr_out or "").lower()
@@ -172,7 +176,8 @@ class Downloader:
         self.log.bind(step="queue").info("Starting download of %d URL(s)…", len(urls))
 
         meta_workers = metadata_workers()
-        work_count = workers if workers is not None else download_workers()
+        requested_workers = workers if workers is not None else download_workers()
+        work_count = _clamp_worker_count(requested_workers)
         delay_seconds = item_delay()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=meta_workers) as pool:
@@ -255,13 +260,16 @@ class Downloader:
         def _handle_unknown_error(ex: Exception, e: Optional[_Entry], i: int) -> None:
             nonlocal errors
             errors += 1
+            safe_reason = sanitize_error(str(ex))
+            classification = classify_ytdlp_error(safe_reason)
+            client_reason = safe_reason if classification.get("category") != "generic" else "Internal download error"
             failed_list.append({
                 "title": e.title if e else "—",
                 "artist": e.uploader if e else "—",
                 "url": (e.source_url or e.url) if e else "—",
-                "reason": str(ex),
+                "reason": client_reason,
                 "attempts": 1,
-                "category": classify_ytdlp_error(str(ex)).get("category"),
+                "category": classification.get("category"),
             })
             self.log.bind(step="download").error("Error in entry %d/%d: %s", i, total, ex)
             self.log.bind(step="download").info("Progress: %d/%d", i, total)
@@ -338,7 +346,11 @@ class Downloader:
             return None, reason
         except Exception as e:
             self.log.bind(step="metadata", url=eff_url).error("Metadata fetch error: %s", e)
-            return None, f"Metadata fetch error: {e}"
+            safe_reason = sanitize_error(str(e))
+            classification = classify_ytdlp_error(safe_reason)
+            if classification.get("category") == "generic":
+                return None, "Metadata fetch error"
+            return None, f"Metadata fetch error: {safe_reason}"
 
     def _process_entry(self, entry: "_Entry") -> None:
         """

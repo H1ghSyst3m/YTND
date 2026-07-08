@@ -1,9 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
+import pytest
 
 from ytnd import database
-from ytnd.downloader import Downloader
+from ytnd.downloader import Downloader, _clamp_worker_count
 import ytnd.downloader as downloader_module
 
 
@@ -33,32 +34,14 @@ def test_add_urls_deduplicates_existing_and_new_urls():
     ]
 
 
-def test_save_cover_allows_ffmpeg_from_path(monkeypatch):
+def test_save_cover_allows_ffmpeg_from_path(monkeypatch, fake_ytdlp):
     uid = "coverffmpeg"
     downloader = Downloader(uid)
     entry = SimpleNamespace(id="video123", url="https://example.test/watch?v=video123")
-    captured = {}
 
-    def fake_build_options(base):
-        captured["base"] = base
-        opts = dict(base)
-        opts["sentinel"] = "shared"
-        return opts
-
-    class FakeYoutubeDL:
-        def __init__(self, opts):
-            self.opts = opts
-            captured["opts"] = opts
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def download(self, urls):
-            Path(self.opts["outtmpl"].replace("%(ext)s", "webp")).write_bytes(b"fake-webp")
-            return 0
+    def fake_download(ydl, urls):
+        Path(ydl.opts["outtmpl"].replace("%(ext)s", "webp")).write_bytes(b"fake-webp")
+        return 0
 
     def fake_run(cmd, check, timeout):
         assert cmd[0] == "ffmpeg"
@@ -68,8 +51,7 @@ def test_save_cover_allows_ffmpeg_from_path(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(downloader_module, "FFMPEG_EXECUTABLE", "ffmpeg")
-    monkeypatch.setattr(downloader_module, "build_ytdlp_options", fake_build_options)
-    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    captured = fake_ytdlp(downloader_module, download=fake_download)
     monkeypatch.setattr(downloader_module.subprocess, "run", fake_run)
 
     assert downloader._save_cover(entry) == "video123.jpg"
@@ -79,41 +61,22 @@ def test_save_cover_allows_ffmpeg_from_path(monkeypatch):
     assert not (downloader.cover_dir / "video123.webp").exists()
 
 
-def test_fetch_metadata_uses_shared_ytdlp_options(monkeypatch):
+def test_fetch_metadata_uses_shared_ytdlp_options(fake_ytdlp):
     uid = "metadataopts"
     try:
         database.add_user(uid)
     except ValueError:
         pass
 
-    captured = {}
+    def fake_extract(ydl, url, download):
+        return {
+            "id": "video123",
+            "title": "Track",
+            "uploader": "Artist",
+            "webpage_url": url,
+        }
 
-    def fake_build_options(base):
-        captured["base"] = base
-        opts = dict(base)
-        opts["sentinel"] = "shared"
-        return opts
-
-    class FakeYoutubeDL:
-        def __init__(self, opts):
-            captured["opts"] = opts
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def extract_info(self, url, download):
-            return {
-                "id": "video123",
-                "title": "Track",
-                "uploader": "Artist",
-                "webpage_url": url,
-            }
-
-    monkeypatch.setattr(downloader_module, "build_ytdlp_options", fake_build_options)
-    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    captured = fake_ytdlp(downloader_module, extract_info=fake_extract)
 
     data, err = Downloader(uid)._fetch_metadata("https://youtube.com/watch?v=video123")
 
@@ -123,31 +86,26 @@ def test_fetch_metadata_uses_shared_ytdlp_options(monkeypatch):
     assert captured["base"]["quiet"] is True
 
 
-def test_process_entry_uses_shared_ytdlp_options(monkeypatch):
+def test_fetch_metadata_hides_generic_exception_details(fake_ytdlp):
+    def fake_extract(ydl, url, download):
+        raise RuntimeError("Cookie: SID=secret")
+
+    fake_ytdlp(downloader_module, extract_info=fake_extract)
+
+    data, err = Downloader("metadatahide")._fetch_metadata("https://youtube.com/watch?v=video123")
+
+    assert data is None
+    assert err == "Metadata fetch error"
+    assert "secret" not in err
+
+
+def test_process_entry_uses_shared_ytdlp_options(monkeypatch, fake_ytdlp):
     uid = "downloadopts"
     downloader = Downloader(uid)
-    captured = {}
 
-    def fake_build_options(base):
-        captured["base"] = base
-        opts = dict(base)
-        opts["sentinel"] = "shared"
-        return opts
-
-    class FakeYoutubeDL:
-        def __init__(self, opts):
-            captured["opts"] = opts
-            self.opts = opts
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def download(self, urls):
-            Path(self.opts["outtmpl"].replace("%(ext)s", "opus")).write_bytes(b"fake-opus")
-            return 0
+    def fake_download(ydl, urls):
+        Path(ydl.opts["outtmpl"].replace("%(ext)s", "opus")).write_bytes(b"fake-opus")
+        return 0
 
     entry = SimpleNamespace(
         id="video123",
@@ -160,14 +118,63 @@ def test_process_entry_uses_shared_ytdlp_options(monkeypatch):
         description="",
     )
 
-    monkeypatch.setattr(downloader_module, "build_ytdlp_options", fake_build_options)
-    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    captured = fake_ytdlp(downloader_module, download=fake_download)
     monkeypatch.setattr(Downloader, "_save_cover", lambda self, entry: None)
 
     downloader._process_entry(entry)
 
     assert captured["opts"]["sentinel"] == "shared"
     assert captured["base"]["format"] == "bestaudio/best"
+
+
+@pytest.mark.parametrize(
+    ("workers", "expected"),
+    [
+        (999, 8),
+        (8, 8),
+        (4, 4),
+        (1, 1),
+        (0, 1),
+        (-5, 1),
+    ],
+)
+def test_clamp_worker_count_keeps_download_workers_in_safe_range(workers, expected):
+    assert _clamp_worker_count(workers) == expected
+
+
+def test_run_clamps_excessive_worker_override_before_thread_pool(monkeypatch):
+    uid = "queueworkerclamp"
+    try:
+        database.add_user(uid)
+    except ValueError:
+        pass
+
+    database.set_queue(uid, ["https://example.test/one", "https://example.test/two"])
+    seen_workers = []
+    original_executor = downloader_module.concurrent.futures.ThreadPoolExecutor
+
+    class RecordingExecutor(original_executor):
+        def __init__(self, max_workers=None, *args, **kwargs):
+            seen_workers.append(max_workers)
+            super().__init__(max_workers=max_workers, *args, **kwargs)
+
+    def fake_fetch(self, url):
+        return {
+            "id": url.rsplit("/", 1)[-1],
+            "title": url.rsplit("/", 1)[-1],
+            "uploader": "Artist",
+            "webpage_url": url,
+        }, None
+
+    monkeypatch.setenv("YTDLP_ITEM_DELAY", "0")
+    monkeypatch.setattr(downloader_module.concurrent.futures, "ThreadPoolExecutor", RecordingExecutor)
+    monkeypatch.setattr(Downloader, "_fetch_metadata", fake_fetch)
+    monkeypatch.setattr(Downloader, "_process_entry", lambda self, entry: None)
+
+    result = Downloader(uid).run(workers=999)
+
+    assert result["downloaded"] == 2
+    assert seen_workers[-1] == 8
 
 
 def test_run_keeps_metadata_failures_in_queue(monkeypatch):
@@ -232,6 +239,38 @@ def test_run_keeps_download_failures_in_queue(monkeypatch):
     assert result["errors"] == 1
     assert result["failed"][0]["category"] == "rate_limited"
     assert database.get_queue(uid) == ["https://example.test/bad"]
+
+
+def test_run_hides_generic_download_exception_details(monkeypatch):
+    uid = "queuehideerror"
+    try:
+        database.add_user(uid)
+    except ValueError:
+        pass
+
+    database.set_queue(uid, ["https://example.test/secret"])
+
+    def fake_fetch(self, url):
+        return {
+            "id": "secret",
+            "title": "Secret",
+            "uploader": "Artist",
+            "webpage_url": url,
+        }, None
+
+    def fake_process(self, entry):
+        raise RuntimeError("Authorization: Bearer secret-token")
+
+    monkeypatch.setenv("YTDLP_ITEM_DELAY", "0")
+    monkeypatch.setattr(Downloader, "_fetch_metadata", fake_fetch)
+    monkeypatch.setattr(Downloader, "_process_entry", fake_process)
+
+    result = Downloader(uid).run(workers=1)
+
+    assert result["errors"] == 1
+    assert result["failed"][0]["reason"] == "Internal download error"
+    assert result["failed"][0]["category"] == "generic"
+    assert "secret-token" not in result["failed"][0]["reason"]
 
 
 def test_run_staggers_multi_worker_submission(monkeypatch):

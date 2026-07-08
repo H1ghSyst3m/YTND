@@ -259,6 +259,11 @@ def _cookie_rows(cookie_file: Path) -> tuple[list[dict[str, str]], int]:
     return rows, malformed
 
 
+def _is_youtube_cookie_domain(domain: str) -> bool:
+    normalized = (domain or "").strip().lstrip(".").rstrip(".").lower()
+    return normalized == "youtube.com" or normalized.endswith(".youtube.com")
+
+
 def cookie_health(cookie_file: Optional[Path] = None) -> Dict[str, Any]:
     cookie_file = cookie_file or COOKIES_FILE
     if not cookie_file.exists():
@@ -273,7 +278,7 @@ def cookie_health(cookie_file: Optional[Path] = None) -> Dict[str, Any]:
         return {"status": "malformed", "detail": "Cookie file contains no Netscape cookie rows.", "rows": 0}
 
     now = int(time.time())
-    youtube_rows = [row for row in rows if "youtube.com" in row["domain"].lower()]
+    youtube_rows = [row for row in rows if _is_youtube_cookie_domain(row["domain"])]
     def row_expired(row: dict[str, str]) -> bool:
         try:
             expires = int(row["expires"])

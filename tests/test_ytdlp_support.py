@@ -1,6 +1,6 @@
 import time
 
-from ytnd import ytdlp_support
+from ytnd import utils, ytdlp_support
 
 
 def _clear_ytdlp_env(monkeypatch):
@@ -158,6 +158,27 @@ def test_cookie_health_counts_httponly_youtube_cookie_rows(tmp_path):
     assert status["youtubeRows"] == 2
 
 
+def test_cookie_health_ignores_youtube_lookalike_domains(tmp_path):
+    expires = int(time.time()) + 3600
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text(
+        "\n".join(
+            [
+                f".notyoutube.com\tTRUE\t/\tTRUE\t{expires}\tLOGIN_INFO\tlogin",
+                f".youtube.com.evil\tTRUE\t/\tTRUE\t{expires}\tSAPISID\tsid",
+                f"www.youtube.com\tTRUE\t/\tTRUE\t{expires}\tLOGIN_INFO\tlogin",
+                f".youtube.com\tTRUE\t/\tTRUE\t{expires}\tSAPISID\tsid",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = ytdlp_support.cookie_health(cookies)
+
+    assert status["status"] == "auth_present"
+    assert status["youtubeRows"] == 2
+
+
 def test_cookie_health_reports_malformed_and_no_youtube_cookies(tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("not-a-netscape-row\n.example.com\tTRUE\t/\tTRUE\t0\tfoo\tbar\n", encoding="utf-8")
@@ -226,3 +247,10 @@ def test_sanitize_error_redacts_sensitive_headers_and_tokens():
     assert "po_token=<redacted>" in sanitized
     assert "pot=<redacted>" in sanitized
     assert "secret" not in sanitized
+
+
+def test_youtube_playlist_detection_rejects_lookalike_hosts():
+    assert utils.is_youtube_playlist_url("https://www.youtube.com/playlist?list=PL123")
+    assert utils.is_youtube_playlist_url("https://music.youtube.com/watch?list=PL123")
+    assert not utils.is_youtube_playlist_url("https://youtube.com.evil/playlist?list=PL123")
+    assert not utils.is_youtube_playlist_url("https://notyoutube.com/playlist?list=PL123")
