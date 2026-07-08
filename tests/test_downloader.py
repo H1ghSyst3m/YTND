@@ -8,12 +8,16 @@ from ytnd.downloader import Downloader, _clamp_worker_count
 import ytnd.downloader as downloader_module
 
 
-def test_add_urls_deduplicates_existing_and_new_urls():
-    uid = "queuededupe"
+def ensure_user(uid: str) -> None:
     try:
         database.add_user(uid)
     except ValueError:
         pass
+
+
+def test_add_urls_deduplicates_existing_and_new_urls():
+    uid = "queuededupe"
+    ensure_user(uid)
 
     database.set_queue(uid, ["https://example.test/a"])
     downloader = Downloader(uid)
@@ -63,10 +67,7 @@ def test_save_cover_allows_ffmpeg_from_path(monkeypatch, fake_ytdlp):
 
 def test_fetch_metadata_uses_shared_ytdlp_options(fake_ytdlp):
     uid = "metadataopts"
-    try:
-        database.add_user(uid)
-    except ValueError:
-        pass
+    ensure_user(uid)
 
     def fake_extract(ydl, url, download):
         return {
@@ -144,10 +145,7 @@ def test_clamp_worker_count_keeps_download_workers_in_safe_range(workers, expect
 
 def test_run_clamps_excessive_worker_override_before_thread_pool(monkeypatch):
     uid = "queueworkerclamp"
-    try:
-        database.add_user(uid)
-    except ValueError:
-        pass
+    ensure_user(uid)
 
     database.set_queue(uid, ["https://example.test/one", "https://example.test/two"])
     seen_workers = []
@@ -179,10 +177,7 @@ def test_run_clamps_excessive_worker_override_before_thread_pool(monkeypatch):
 
 def test_run_keeps_metadata_failures_in_queue(monkeypatch):
     uid = "queuekeepmeta"
-    try:
-        database.add_user(uid)
-    except ValueError:
-        pass
+    ensure_user(uid)
 
     database.set_queue(uid, ["https://example.test/ok", "https://example.test/fail"])
 
@@ -209,10 +204,7 @@ def test_run_keeps_metadata_failures_in_queue(monkeypatch):
 
 def test_run_keeps_download_failures_in_queue(monkeypatch):
     uid = "queuekeepdownload"
-    try:
-        database.add_user(uid)
-    except ValueError:
-        pass
+    ensure_user(uid)
 
     database.set_queue(uid, ["https://example.test/ok", "https://example.test/bad"])
 
@@ -243,10 +235,7 @@ def test_run_keeps_download_failures_in_queue(monkeypatch):
 
 def test_run_hides_generic_download_exception_details(monkeypatch):
     uid = "queuehideerror"
-    try:
-        database.add_user(uid)
-    except ValueError:
-        pass
+    ensure_user(uid)
 
     database.set_queue(uid, ["https://example.test/secret"])
 
@@ -275,10 +264,7 @@ def test_run_hides_generic_download_exception_details(monkeypatch):
 
 def test_run_staggers_multi_worker_submission(monkeypatch):
     uid = "queuepaceworkers"
-    try:
-        database.add_user(uid)
-    except ValueError:
-        pass
+    ensure_user(uid)
 
     urls = [
         "https://example.test/one",

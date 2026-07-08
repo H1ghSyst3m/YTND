@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
-    "yt-dlp[default]",
+    "yt-dlp[default]>=2026.7.4",
     "mutagen",
     "passlib[argon2]",
     "argon2-cffi",

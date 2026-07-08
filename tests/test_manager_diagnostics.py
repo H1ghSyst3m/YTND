@@ -26,6 +26,30 @@ def test_youtube_diagnostics_classifies_ytdlp_errors(client, admin_user, monkeyp
     assert "bot" in data["error"].lower()
 
 
+def test_youtube_diagnostics_classifies_generic_errors(client, admin_user, monkeypatch, fake_ytdlp):
+    def fake_extract(ydl, url, download):
+        raise RuntimeError("Cookie: SID=secret\nHTTP Error 403: Forbidden")
+
+    fake_ytdlp(manager_server, extract_info=fake_extract)
+    monkeypatch.setattr(manager_server, "_check_cookies_status", lambda: {"status": "auth_present"})
+    monkeypatch.setattr(manager_server, "_check_ytdlp_status", lambda: {"status": "ok", "version": "test"})
+
+    response = client.get(
+        "/api/system/youtube-diagnostics",
+        params={"url": "https://youtube.com/watch?v=video123"},
+        cookies={
+            SESSION_UID_COOKIE: admin_user["uid"],
+            SESSION_SIG_COOKIE: _sign_uid(admin_user["uid"]),
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["category"] == "forbidden"
+    assert "secret" not in data["error"]
+
+
 def test_youtube_diagnostics_requires_admin(client, regular_user):
     response = client.get(
         "/api/system/youtube-diagnostics",
@@ -83,3 +107,28 @@ def test_probe_uses_shared_ytdlp_options(fake_ytdlp):
     assert reason == "ok"
     assert captured["opts"]["sentinel"] == "shared"
     assert captured["base"]["quiet"] is True
+
+
+def test_probe_classifies_download_errors(fake_ytdlp):
+    def fake_extract(ydl, url, download):
+        raise manager_server.yt_dlp.utils.DownloadError("HTTP Error 429: Too Many Requests")
+
+    fake_ytdlp(manager_server, extract_info=fake_extract)
+
+    ok, reason = manager_server._probe_url_available("https://youtube.com/watch?v=video123")
+
+    assert ok is False
+    assert reason.startswith("rate_limited: yt-dlp error:")
+
+
+def test_probe_classifies_generic_errors(fake_ytdlp):
+    def fake_extract(ydl, url, download):
+        raise RuntimeError("Authorization: Bearer secret\nHTTP Error 403: Forbidden")
+
+    fake_ytdlp(manager_server, extract_info=fake_extract)
+
+    ok, reason = manager_server._probe_url_available("https://youtube.com/watch?v=video123")
+
+    assert ok is False
+    assert reason.startswith("forbidden: Probe failed:")
+    assert "secret" not in reason

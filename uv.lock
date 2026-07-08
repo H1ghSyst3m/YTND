@@ -1236,7 +1236,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "requests" },
     { name = "uvicorn", extra = ["standard"] },
-    { name = "yt-dlp", extra = ["default"] },
+    { name = "yt-dlp", extra = ["default"], specifier = ">=2026.7.4" },
 ]
 
 [package.optional-dependencies]
@@ -1257,6 +1257,6 @@ requires-dist = [
     { name = "python-multipart" },
     { name = "requests" },
     { name = "uvicorn", extras = ["standard"] },
-    { name = "yt-dlp", extras = ["default"] },
+    { name = "yt-dlp", extras = ["default"], specifier = ">=2026.7.4" },
 ]
 provides-extras = ["test"]

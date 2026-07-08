@@ -522,14 +522,9 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             data = ydl.extract_info(eff_url, download=False)
-    except yt_dlp.utils.DownloadError as e:
-        err = sanitize_error(f"yt-dlp error: {e}", max_length=300)
-        category = classify_ytdlp_error(err)["category"]
-        return False, f"{category}: {err}"
     except Exception as e:
-        err = sanitize_error(f"Probe failed: {e}", max_length=300)
-        category = classify_ytdlp_error(err)["category"]
-        return False, f"{category}: {err}"
+        prefix = "yt-dlp error" if isinstance(e, yt_dlp.utils.DownloadError) else "Probe failed"
+        return _classified_probe_failure(f"{prefix}: {e}")
 
     if not data:
         return False, "empty response"
@@ -541,6 +536,12 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
         return True, "ok"
 
     return False, "unrecognized response"
+
+
+def _classified_probe_failure(message: str) -> Tuple[bool, str]:
+    err = sanitize_error(message, max_length=300)
+    category = classify_ytdlp_error(err)["category"]
+    return False, f"{category}: {err}"
 
 
 def _is_youtube_diagnostics_url(url: str) -> bool:
@@ -1279,32 +1280,8 @@ def api_youtube_diagnostics(url: str, current: dict = Depends(require_session)):
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             data = ydl.extract_info(eff_url, download=False)
-    except yt_dlp.utils.DownloadError as exc:
-        error = sanitize_error(str(exc), max_length=800)
-        classification = classify_ytdlp_error(error)
-        return {
-            "ok": False,
-            "url": url,
-            "effectiveUrl": eff_url,
-            "error": error,
-            "category": classification["category"],
-            "detail": classification["detail"],
-            "cookiesStatus": _check_cookies_status(),
-            "ytDlpStatus": _check_ytdlp_status(),
-        }
     except Exception as exc:
-        error = sanitize_error(str(exc), max_length=800)
-        classification = classify_ytdlp_error(error)
-        return {
-            "ok": False,
-            "url": url,
-            "effectiveUrl": eff_url,
-            "error": error,
-            "category": classification["category"],
-            "detail": classification["detail"],
-            "cookiesStatus": _check_cookies_status(),
-            "ytDlpStatus": _check_ytdlp_status(),
-        }
+        return _youtube_diagnostics_failure(url, eff_url, exc)
 
     entry_count = len(data.get("entries") or []) if isinstance(data, dict) else 0
     return {
@@ -1318,6 +1295,22 @@ def api_youtube_diagnostics(url: str, current: dict = Depends(require_session)):
         "cookiesStatus": _check_cookies_status(),
         "ytDlpStatus": _check_ytdlp_status(),
     }
+
+
+def _youtube_diagnostics_failure(url: str, eff_url: str, exc: Exception) -> Dict[str, Any]:
+    error = sanitize_error(str(exc), max_length=800)
+    classification = classify_ytdlp_error(error)
+    return {
+        "ok": False,
+        "url": url,
+        "effectiveUrl": eff_url,
+        "error": error,
+        "category": classification["category"],
+        "detail": classification["detail"],
+        "cookiesStatus": _check_cookies_status(),
+        "ytDlpStatus": _check_ytdlp_status(),
+    }
+
 
 # ───────────────────────── User Management (Admin) ─────────────────────────
 @app.get("/api/users/detailed")

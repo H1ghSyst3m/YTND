@@ -143,16 +143,22 @@ function DashboardView() {
                     </p>
                   )}
                   {data.adminData.ytDlpStatus.ejsStatus && (
-                    <p className="text-xs text-muted-foreground break-words">
-                      EJS: {data.adminData.ytDlpStatus.ejsStatus.status}
-                      {data.adminData.ytDlpStatus.ejsStatus.version ? ` ${data.adminData.ytDlpStatus.ejsStatus.version}` : ''}
-                    </p>
+                    <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                      {getStatusIcon(data.adminData.ytDlpStatus.ejsStatus.status)}
+                      <p className="break-words">
+                        EJS: {data.adminData.ytDlpStatus.ejsStatus.status}
+                        {data.adminData.ytDlpStatus.ejsStatus.version ? ` ${data.adminData.ytDlpStatus.ejsStatus.version}` : ''}
+                      </p>
+                    </div>
                   )}
                   {data.adminData.ytDlpStatus.jsRuntime && (
-                    <p className="text-xs text-muted-foreground break-words">
-                      JS: {data.adminData.ytDlpStatus.jsRuntime.runtime || data.adminData.ytDlpStatus.jsRuntime.status}
-                      {data.adminData.ytDlpStatus.jsRuntime.version ? ` ${data.adminData.ytDlpStatus.jsRuntime.version}` : ''}
-                    </p>
+                    <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                      {getStatusIcon(data.adminData.ytDlpStatus.jsRuntime.status)}
+                      <p className="break-words">
+                        JS: {data.adminData.ytDlpStatus.jsRuntime.runtime || data.adminData.ytDlpStatus.jsRuntime.status}
+                        {data.adminData.ytDlpStatus.jsRuntime.version ? ` ${data.adminData.ytDlpStatus.jsRuntime.version}` : ''}
+                      </p>
+                    </div>
                   )}
                 </div>
 
