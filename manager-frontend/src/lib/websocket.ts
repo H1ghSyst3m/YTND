@@ -13,7 +13,7 @@ export interface WebSocketMessage {
   downloaded_bytes?: number;
   total_bytes?: number;
   error?: string;
-  result?: any;
+  result?: unknown;
 }
 
 type MessageHandler = (message: WebSocketMessage) => void;

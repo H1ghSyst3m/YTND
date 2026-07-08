@@ -10,7 +10,7 @@ def main():
     p = argparse.ArgumentParser(description="YTN Downloader – CLI")
     p.add_argument("urls", nargs="+", help="YouTube links or text files with URLs")
     p.add_argument("-u", "--user", default="local", help="user ID (folder name)")
-    p.add_argument("-w", "--workers", type=int, default=4, help="parallel threads")
+    p.add_argument("-w", "--workers", type=int, default=None, help="parallel threads (default: DOWNLOAD_WORKERS or 1)")
     args = p.parse_args()
 
     all_urls = []

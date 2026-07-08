@@ -21,7 +21,7 @@ docker_images:
 file_denylist: {  }
 startup_commands:
   Default: >-
-    bash -lc 'if [ -z "${MANAGER_BASE_URL:-}" ]; then unset MANAGER_BASE_URL; fi; export MANAGER_HOST=0.0.0.0; export MANAGER_PORT="{{MANAGER_PORT}}"; export DATA_ROOT=/home/container/data; export DATABASE_FILE=/home/container/data/ytnd.db; export COOKIES_FILE=/home/container/data/cookies.txt; export FFMPEG_PATH=/home/container/bin/ffmpeg; echo "Checking yt-dlp update..."; /home/container/.venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true; if /home/container/.venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir --upgrade "yt-dlp"; then echo "yt-dlp version: $(/home/container/.venv/bin/python -m yt_dlp --version)"; else echo "WARNING: yt-dlp update failed; continuing with installed version"; fi; exec /home/container/.venv/bin/python -m ytnd.manager_server'
+    bash -lc 'if [ -z "${MANAGER_BASE_URL:-}" ]; then unset MANAGER_BASE_URL; fi; export MANAGER_HOST=0.0.0.0; export MANAGER_PORT="{{MANAGER_PORT}}"; export DATA_ROOT=/home/container/data; export DATABASE_FILE=/home/container/data/ytnd.db; export COOKIES_FILE=/home/container/data/cookies.txt; export FFMPEG_PATH=/home/container/bin/ffmpeg; export PATH="/home/container/bin:${PATH}"; echo "Checking yt-dlp update..."; /home/container/.venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true; if /home/container/.venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir --upgrade "yt-dlp[default]"; then echo "yt-dlp version: $(/home/container/.venv/bin/python -m yt_dlp --version)"; else echo "WARNING: yt-dlp update failed; continuing with installed version"; fi; if command -v deno >/dev/null 2>&1; then echo "deno version: $(deno --version | head -n 1)"; else echo "WARNING: deno not found; YouTube JS challenge support may be limited"; fi; exec /home/container/.venv/bin/python -m ytnd.manager_server'
 config:
   files: {  }
   startup:
@@ -50,6 +50,7 @@ scripts:
           git \
           rsync \
           tar \
+          unzip \
           xz-utils
       rm -rf /var/lib/apt/lists/*
 
@@ -58,10 +59,12 @@ scripts:
           x86_64|amd64)
               NODE_ARCH="x64"
               FFMPEG_ARCH="amd64"
+              DENO_ARCH="x86_64-unknown-linux-gnu"
               ;;
           aarch64|arm64)
               NODE_ARCH="arm64"
               FFMPEG_ARCH="arm64"
+              DENO_ARCH="aarch64-unknown-linux-gnu"
               ;;
           *)
               echo "Unsupported architecture: ${ARCH}"
@@ -100,7 +103,7 @@ scripts:
       python -m uv sync --frozen --no-dev
 
       echo "Updating yt-dlp to the latest PyPI release..."
-      python -m uv pip install --python /mnt/server/.venv/bin/python --upgrade "pip" "yt-dlp"
+      python -m uv pip install --python /mnt/server/.venv/bin/python --upgrade "pip" "yt-dlp[default]"
       echo "Installed yt-dlp version: $(/mnt/server/.venv/bin/python -m yt_dlp --version)"
 
       echo "Building manager frontend..."
@@ -119,6 +122,13 @@ scripts:
           "${FFMPEG_ROOT}/ffprobe"
       chmod 0755 /mnt/server/bin/ffmpeg /mnt/server/bin/ffprobe
       rm -f /tmp/ffmpeg.tar.xz
+
+      echo "Installing Deno runtime for yt-dlp YouTube JS challenges..."
+      curl -fsSL "https://github.com/denoland/deno/releases/latest/download/deno-${DENO_ARCH}.zip" -o /tmp/deno.zip
+      unzip -oq /tmp/deno.zip -d /mnt/server/bin
+      chmod 0755 /mnt/server/bin/deno
+      rm -f /tmp/deno.zip
+      echo "Installed Deno version: $(/mnt/server/bin/deno --version | head -n 1)"
 
       echo "Installation completed..."
     container: 'python:3.13-slim-bookworm'
@@ -194,6 +204,172 @@ variables:
     description: 'Expose downloaded audio through the YTND WebDAV endpoint on the same server port.'
     env_variable: WEBDAV_ENABLED
     default_value: true
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - boolean
+  -
+    sort: 7
+    name: 'Download Workers'
+    description: 'Parallel yt-dlp download workers. Keep this at 1 on shared or data-center servers unless you know the IP/session can handle more.'
+    env_variable: DOWNLOAD_WORKERS
+    default_value: 1
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:1,8'
+  -
+    sort: 8
+    name: 'Metadata Workers'
+    description: 'Parallel yt-dlp metadata workers. Keep this at 1 for server reliability.'
+    env_variable: YTDLP_METADATA_WORKERS
+    default_value: 1
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:1,8'
+  -
+    sort: 9
+    name: 'Item Delay'
+    description: 'Seconds to wait between sequential downloads when using one worker.'
+    env_variable: YTDLP_ITEM_DELAY
+    default_value: 1.5
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - numeric
+      - 'between:0,30'
+  -
+    sort: 10
+    name: 'Force IPv4'
+    description: 'Force yt-dlp to use IPv4. Leave disabled unless the server IPv6 route is broken.'
+    env_variable: YTDLP_FORCE_IPV4
+    default_value: false
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - boolean
+  -
+    sort: 11
+    name: 'yt-dlp JS Runtime'
+    description: 'JavaScript runtime for YouTube EJS challenges. Deno is installed persistently by this egg.'
+    env_variable: YTDLP_JS_RUNTIME
+    default_value: deno
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'in:deno,node,quickjs,none'
+  -
+    sort: 12
+    name: 'yt-dlp JS Runtime Path'
+    description: 'Optional explicit runtime executable path. Leave empty to use PATH auto-detection.'
+    env_variable: YTDLP_JS_RUNTIME_PATH
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'max:255'
+  -
+    sort: 13
+    name: 'yt-dlp Proxy'
+    description: 'Optional proxy URL passed to yt-dlp when the server IP is blocked or rate-limited.'
+    env_variable: YTDLP_PROXY
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'max:255'
+  -
+    sort: 14
+    name: 'yt-dlp Source Address'
+    description: 'Optional local source IP address passed to yt-dlp.'
+    env_variable: YTDLP_SOURCE_ADDRESS
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'max:128'
+  -
+    sort: 15
+    name: 'yt-dlp User Agent'
+    description: 'Optional custom User-Agent passed to yt-dlp. Leave empty for yt-dlp defaults.'
+    env_variable: YTDLP_USER_AGENT
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'max:255'
+  -
+    sort: 16
+    name: 'yt-dlp Extractor Args JSON'
+    description: 'Advanced JSON object merged into yt-dlp extractor_args, for example YouTube PO-token settings. Do not paste secrets into logs.'
+    env_variable: YTDLP_EXTRACTOR_ARGS_JSON
+    default_value: ''
+    user_viewable: false
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'max:4000'
+  -
+    sort: 17
+    name: 'yt-dlp Socket Timeout'
+    description: 'yt-dlp socket timeout in seconds.'
+    env_variable: YTDLP_SOCKET_TIMEOUT
+    default_value: 30
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:1,300'
+  -
+    sort: 18
+    name: 'yt-dlp Request Delay'
+    description: 'Optional delay between yt-dlp HTTP requests in seconds.'
+    env_variable: YTDLP_REQUEST_DELAY
+    default_value: 0
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - numeric
+      - 'between:0,30'
+  -
+    sort: 19
+    name: 'yt-dlp Remote Components'
+    description: 'Optional remote EJS components. Use true for ejs:github, or a comma-separated list such as ejs:github,ejs:npm.'
+    env_variable: YTDLP_REMOTE_COMPONENTS
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'max:255'
+  -
+    sort: 20
+    name: 'yt-dlp Android Retry'
+    description: 'Enable a last-resort Android client retry after default extraction fails. Keep disabled unless diagnostics point to it.'
+    env_variable: YTDLP_ANDROID_RETRY
+    default_value: false
     user_viewable: true
     user_editable: true
     rules:

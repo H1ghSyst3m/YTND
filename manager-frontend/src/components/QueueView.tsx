@@ -25,6 +25,12 @@ interface QueueItem {
   error?: string;
 }
 
+const queueStatuses: QueueItem['status'][] = ['pending', 'downloading', 'processing', 'completed', 'error'];
+
+function isQueueStatus(status: string | undefined): status is QueueItem['status'] {
+  return queueStatuses.includes(status as QueueItem['status']);
+}
+
 function QueueView({ userId }: QueueViewProps) {
   const { showToast } = useToast();
   const queryClient = useQueryClient();
@@ -56,7 +62,7 @@ function QueueView({ userId }: QueueViewProps) {
           if (item.url === message.url) {
             return {
               ...item,
-              status: message.status as any || item.status,
+              status: isQueueStatus(message.status) ? message.status : item.status,
               title: message.title || item.title,
               artist: message.artist || item.artist,
               id: message.id || item.id,

@@ -20,7 +20,6 @@ from passlib.context import CryptContext
 
 from .config import (
     OUTPUT_ROOT,
-    COOKIES_FILE,
     COVERS_ROOT,
     LOG_DIR,
     MANAGER_HOST,
@@ -30,6 +29,14 @@ from .config import (
 )
 from .downloader import Downloader
 from .utils import sanitize_filename, sanitize_user_id, is_youtube_playlist_url, strip_playlist_context, logger
+from .ytdlp_support import (
+    build_ytdlp_options,
+    classify_ytdlp_error,
+    cookie_health,
+    detect_js_runtime,
+    sanitize_error,
+    ytdlp_ejs_status,
+)
 from . import database
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -505,22 +512,24 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
     is_pl = is_youtube_playlist_url(url)
     eff_url = url if is_pl else strip_playlist_context(url)
 
-    ydl_opts = {
+    ydl_opts = build_ytdlp_options(base={
         'quiet': True,
         'no_warnings': True,
         'extract_flat': 'in_playlist' if is_pl else False,
         'socket_timeout': 30,
-    }
-    if COOKIES_FILE.exists():
-        ydl_opts['cookiefile'] = str(COOKIES_FILE)
+    })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             data = ydl.extract_info(eff_url, download=False)
     except yt_dlp.utils.DownloadError as e:
-        return False, f"yt-dlp error: {str(e)[:200]}"
+        err = sanitize_error(f"yt-dlp error: {e}", max_length=300)
+        category = classify_ytdlp_error(err)["category"]
+        return False, f"{category}: {err}"
     except Exception as e:
-        return False, f"Probe failed: {str(e)[:200]}"
+        err = sanitize_error(f"Probe failed: {e}", max_length=300)
+        category = classify_ytdlp_error(err)["category"]
+        return False, f"{category}: {err}"
 
     if not data:
         return False, "empty response"
@@ -677,6 +686,14 @@ def _webdav_auth_user(request: Request) -> dict:
     _webdav_auth_failures.pop(throttle_key, None)
     return user
 
+def _webdav_reject_traversal_request(request: Request) -> None:
+    raw_path = request.scope.get("raw_path") or request.url.path
+    if isinstance(raw_path, bytes):
+        raw_path = raw_path.decode("utf-8", errors="ignore")
+    decoded_path = unquote(str(raw_path)).replace("\\", "/")
+    if any(part == ".." for part in decoded_path.split("/")):
+        raise HTTPException(400, "Invalid WebDAV path")
+
 def _webdav_assert_access(auth_user: dict, requested_user_id: str) -> str:
     try:
         requested_user_id = sanitize_user_id(requested_user_id)
@@ -786,6 +803,20 @@ def _check_ytdlp_status() -> Dict[str, Any]:
     """Check yt-dlp status and version."""
     try:
         current_version = yt_dlp.version.__version__
+        ejs = ytdlp_ejs_status()
+        runtime = detect_js_runtime()
+        result = {
+            "status": "ok",
+            "version": current_version,
+            "ejsStatus": ejs,
+            "jsRuntime": {
+                "status": runtime.status,
+                "runtime": runtime.runtime,
+                "version": runtime.version,
+                "path": runtime.path,
+                "detail": runtime.detail,
+            },
+        }
         
         try:
             import requests
@@ -796,16 +827,13 @@ def _check_ytdlp_status() -> Dict[str, Any]:
             if response.status_code == 200:
                 latest_version = response.json().get("tag_name", "").lstrip("v")
                 is_latest = current_version == latest_version
-                return {
-                    "status": "ok",
-                    "version": current_version,
-                    "latest": latest_version,
-                    "updateAvailable": not is_latest
-                }
+                result["latest"] = latest_version
+                result["updateAvailable"] = not is_latest
+                return result
         except Exception:
             pass
         
-        return {"status": "ok", "version": current_version}
+        return result
     except Exception:
         return {"status": "error", "version": "not found"}
 
@@ -821,11 +849,9 @@ def _check_ffmpeg_status() -> Dict[str, str]:
     except Exception:
         return {"status": "error", "version": "not found"}
 
-def _check_cookies_status() -> Dict[str, str]:
-    """Check if cookies file exists."""
-    if COOKIES_FILE.exists():
-        return {"status": "present"}
-    return {"status": "missing"}
+def _check_cookies_status() -> Dict[str, Any]:
+    """Check if cookies file exists and looks useful for YouTube."""
+    return cookie_health()
 
 def _get_log_summary() -> Dict[str, int]:
     """Get summary of log entries by severity from the last 24 hours."""
@@ -1218,6 +1244,67 @@ def api_probe(url: str, _: dict = Depends(require_session)):
     ok, reason = _probe_url_available(url)
     return {"ok": ok, "reason": reason}
 
+
+@app.get("/api/system/youtube-diagnostics")
+def api_youtube_diagnostics(url: str, current: dict = Depends(require_session)):
+    if current["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if not url or len(url) > 2000:
+        raise HTTPException(status_code=400, detail="URL must be between 1 and 2000 characters")
+
+    is_pl = is_youtube_playlist_url(url)
+    eff_url = url if is_pl else strip_playlist_context(url)
+    opts = build_ytdlp_options(base={
+        "quiet": True,
+        "no_warnings": False,
+        "extract_flat": "in_playlist" if is_pl else False,
+        "playlistend": 5 if is_pl else -1,
+        "skip_download": True,
+    })
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            data = ydl.extract_info(eff_url, download=False)
+    except yt_dlp.utils.DownloadError as exc:
+        error = sanitize_error(str(exc), max_length=800)
+        classification = classify_ytdlp_error(error)
+        return {
+            "ok": False,
+            "url": url,
+            "effectiveUrl": eff_url,
+            "error": error,
+            "category": classification["category"],
+            "detail": classification["detail"],
+            "cookiesStatus": _check_cookies_status(),
+            "ytDlpStatus": _check_ytdlp_status(),
+        }
+    except Exception as exc:
+        error = sanitize_error(str(exc), max_length=800)
+        classification = classify_ytdlp_error(error)
+        return {
+            "ok": False,
+            "url": url,
+            "effectiveUrl": eff_url,
+            "error": error,
+            "category": classification["category"],
+            "detail": classification["detail"],
+            "cookiesStatus": _check_cookies_status(),
+            "ytDlpStatus": _check_ytdlp_status(),
+        }
+
+    entry_count = len(data.get("entries") or []) if isinstance(data, dict) else 0
+    return {
+        "ok": bool(data),
+        "url": url,
+        "effectiveUrl": eff_url,
+        "id": data.get("id") if isinstance(data, dict) else None,
+        "title": data.get("title") if isinstance(data, dict) else None,
+        "uploader": data.get("uploader") if isinstance(data, dict) else None,
+        "entryCount": entry_count,
+        "cookiesStatus": _check_cookies_status(),
+        "ytDlpStatus": _check_ytdlp_status(),
+    }
+
 # ───────────────────────── User Management (Admin) ─────────────────────────
 @app.get("/api/users/detailed")
 def api_users_detailed(current: dict = Depends(require_session)):
@@ -1421,7 +1508,7 @@ async def api_process_queue(
             downloader = Downloader(user_id, connection_manager=manager)
             
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, downloader.run, 4)
+            result = await loop.run_in_executor(None, downloader.run)
             
             await manager.broadcast_to_user(user_id, {
                 "type": "download_complete",
@@ -1454,8 +1541,24 @@ async def api_process_queue(
     return {"message": "Download process started", "queued": len(queue)}
 
 if WEBDAV_ENABLED:
+    @app.api_route("/webdav", methods=["OPTIONS", "PROPFIND", "GET", "HEAD"])
+    async def webdav_missing_user_no_slash(request: Request):
+        _webdav_reject_traversal_request(request)
+        raise HTTPException(400, "Missing WebDAV user")
+
+    @app.api_route("/webdav/", methods=["OPTIONS", "PROPFIND", "GET", "HEAD"])
+    async def webdav_missing_user(request: Request):
+        _webdav_reject_traversal_request(request)
+        raise HTTPException(400, "Missing WebDAV user")
+
+    @app.api_route("/webdav/{user_id}", methods=["OPTIONS", "PROPFIND", "GET", "HEAD"])
+    async def webdav_missing_trailing_slash(user_id: str, request: Request):
+        _webdav_reject_traversal_request(request)
+        raise HTTPException(400, "Invalid WebDAV path")
+
     @app.api_route("/webdav/{user_id}/", methods=["OPTIONS", "PROPFIND", "GET", "HEAD"])
     async def webdav_root(user_id: str, request: Request):
+        _webdav_reject_traversal_request(request)
         auth_user = _webdav_auth_user(request)
         user_id = _webdav_assert_access(auth_user, user_id)
         folder = _webdav_user_folder(user_id)
@@ -1483,6 +1586,7 @@ if WEBDAV_ENABLED:
 
     @app.api_route("/webdav/{user_id}/{file_name:path}", methods=["OPTIONS", "PROPFIND", "GET", "HEAD"])
     async def webdav_file(user_id: str, file_name: str, request: Request):
+        _webdav_reject_traversal_request(request)
         auth_user = _webdav_auth_user(request)
         user_id = _webdav_assert_access(auth_user, user_id)
         folder = _webdav_user_folder(user_id)

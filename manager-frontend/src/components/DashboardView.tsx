@@ -22,9 +22,12 @@ function DashboardView() {
     switch (status) {
       case 'ok':
       case 'present':
+      case 'auth_present':
         return <CheckCircle className="h-5 w-5 text-green-500" />;
       case 'error':
       case 'missing':
+      case 'malformed':
+      case 'expired':
         return <XCircle className="h-5 w-5 text-red-500" />;
       default:
         return <AlertCircle className="h-5 w-5 text-yellow-500" />;
@@ -76,7 +79,7 @@ function DashboardView() {
                 >
                   {song.cover_available ? (
                     <img 
-                      src={api.getCoverUrl(data.userId, song as any) || ''} 
+                      src={api.getCoverUrl(data.userId, song) || ''}
                       alt={song.title}
                       className="w-12 h-12 object-cover rounded flex-shrink-0"
                     />
@@ -139,6 +142,18 @@ function DashboardView() {
                       )}
                     </p>
                   )}
+                  {data.adminData.ytDlpStatus.ejsStatus && (
+                    <p className="text-xs text-muted-foreground break-words">
+                      EJS: {data.adminData.ytDlpStatus.ejsStatus.status}
+                      {data.adminData.ytDlpStatus.ejsStatus.version ? ` ${data.adminData.ytDlpStatus.ejsStatus.version}` : ''}
+                    </p>
+                  )}
+                  {data.adminData.ytDlpStatus.jsRuntime && (
+                    <p className="text-xs text-muted-foreground break-words">
+                      JS: {data.adminData.ytDlpStatus.jsRuntime.runtime || data.adminData.ytDlpStatus.jsRuntime.status}
+                      {data.adminData.ytDlpStatus.jsRuntime.version ? ` ${data.adminData.ytDlpStatus.jsRuntime.version}` : ''}
+                    </p>
+                  )}
                 </div>
 
                 {/* FFmpeg Status */}
@@ -155,14 +170,27 @@ function DashboardView() {
                 </div>
 
                 {/* Cookies Status */}
-                <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
-                  <div className="flex items-center gap-3">
-                    {getStatusIcon(data.adminData.cookiesStatus.status)}
-                    <span className="font-medium text-sm sm:text-base">Cookies File</span>
+                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      {getStatusIcon(data.adminData.cookiesStatus.status)}
+                      <span className="font-medium text-sm sm:text-base">Cookies File</span>
+                    </div>
+                    <span className="text-xs sm:text-sm text-muted-foreground">
+                      {data.adminData.cookiesStatus.status}
+                    </span>
                   </div>
-                  <span className="text-xs sm:text-sm text-muted-foreground">
-                    {data.adminData.cookiesStatus.status}
-                  </span>
+                  {data.adminData.cookiesStatus.detail && (
+                    <p className="text-xs text-muted-foreground break-words">
+                      {data.adminData.cookiesStatus.detail}
+                    </p>
+                  )}
+                  {data.adminData.cookiesStatus.youtubeRows !== undefined && (
+                    <p className="text-xs text-muted-foreground">
+                      YouTube rows: {data.adminData.cookiesStatus.youtubeRows}
+                      {data.adminData.cookiesStatus.expiredRows ? `, expired: ${data.adminData.cookiesStatus.expiredRows}` : ''}
+                    </p>
+                  )}
                 </div>
 
                 {/* Log Summary */}

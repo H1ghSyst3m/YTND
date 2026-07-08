@@ -40,7 +40,7 @@ export interface LogEntry {
   ts: string;
   lvl: 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG';
   msg: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ApiResponse<T> {
@@ -57,11 +57,19 @@ export interface RecentSong {
 }
 
 export interface SystemStatus {
-  status: 'ok' | 'error' | 'present' | 'missing';
+  status: string;
   version?: string;
   detail?: string;
   latest?: string;
   updateAvailable?: boolean;
+  runtime?: string | null;
+  path?: string | null;
+  rows?: number;
+  youtubeRows?: number;
+  malformedRows?: number;
+  expiredRows?: number;
+  ejsStatus?: SystemStatus;
+  jsRuntime?: SystemStatus;
 }
 
 export interface AdminData {
@@ -293,7 +301,7 @@ export async function redownloadSong(
   if (!res.ok) throw new Error('Failed to redownload song');
 }
 
-export function getCoverUrl(userId: string, song: Song): string | null {
+export function getCoverUrl(userId: string, song: { id?: string; cover?: string; cover_available?: boolean }): string | null {
   if (!song.cover_available) return null;
   if (song.cover) {
     return buildUrl('/api/cover', { user_id: userId, filename: song.cover });

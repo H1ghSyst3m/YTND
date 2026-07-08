@@ -33,6 +33,7 @@ YTND Manager is a web-based management interface for downloading and organising 
 - **uv** for Python dependency management.
 - **Node.js and npm** (or yarn/pnpm) for the frontend.
 - **FFmpeg** installed and accessible in your system's `PATH`.
+- **Deno 2.3+** or **Node.js 22+** for yt-dlp's YouTube JavaScript challenge support on servers.
 
 ### Installation
 
@@ -77,6 +78,25 @@ YTND Manager is a web-based management interface for downloading and organising 
     # Optional: only set when ffmpeg is not available in PATH
     # FFMPEG_PATH="/usr/bin/ffmpeg"
 
+    # Optional yt-dlp / YouTube reliability controls
+    # DOWNLOAD_WORKERS="1"
+    # YTDLP_METADATA_WORKERS="1"
+    # YTDLP_ITEM_DELAY="1.5"
+    # YTDLP_FORCE_IPV4="false"
+    # YTDLP_JS_RUNTIME="deno"
+    # YTDLP_JS_RUNTIME_PATH="/usr/local/bin/deno"
+    # YTDLP_PROXY=""
+    # YTDLP_SOURCE_ADDRESS=""
+    # YTDLP_USER_AGENT=""
+    # YTDLP_EXTRACTOR_ARGS_JSON=""
+    # YTDLP_SOCKET_TIMEOUT="30"
+    # YTDLP_RETRIES="10"
+    # YTDLP_FRAGMENT_RETRIES="10"
+    # YTDLP_EXTRACTOR_RETRIES="3"
+    # YTDLP_REQUEST_DELAY="0"
+    # YTDLP_REMOTE_COMPONENTS=""
+    # YTDLP_ANDROID_RETRY="false"
+
     # Optional: enable WebDAV endpoint
     WEBDAV_ENABLED="false"
 
@@ -96,8 +116,25 @@ YTND Manager is a web-based management interface for downloading and organising 
     | `COVERS_ROOT` | No | `DATA_ROOT / "covers"` | Cover image directory. |
     | `LOG_DIR` | No | `DATA_ROOT / "logs"` | Log file directory. |
     | `DATABASE_FILE` | No | `DATA_ROOT / "ytnd.db"` | SQLite database file path. |
-    | `COOKIES_FILE` | No | `DATA_ROOT / "cookies.txt"` | Path where your Netscape `cookies.txt` should be placed (needed for age-restricted content). |
+    | `COOKIES_FILE` | No | `DATA_ROOT / "cookies.txt"` | Path where your Netscape `cookies.txt` should be placed. Required for many server-side YouTube requests. |
     | `FFMPEG_PATH` | No | Uses `PATH`/auto-detect | Path to ffmpeg binary if not available globally. |
+    | `DOWNLOAD_WORKERS` | No | `1` | Number of parallel download workers. Keep low on servers to reduce YouTube bot/rate-limit triggers. |
+    | `YTDLP_METADATA_WORKERS` | No | `1` | Number of parallel metadata probe workers. |
+    | `YTDLP_ITEM_DELAY` | No | `1.5` | Delay in seconds between sequential downloads. |
+    | `YTDLP_FORCE_IPV4` | No | `false` | Force IPv4 for yt-dlp. Leave disabled unless your IPv6 route is broken. |
+    | `YTDLP_JS_RUNTIME` | No | Auto-detect | Preferred JavaScript runtime: `deno`, `node`, `quickjs`, or `none`. |
+    | `YTDLP_JS_RUNTIME_PATH` | No | Auto-detect | Path to the configured JS runtime executable. |
+    | `YTDLP_PROXY` | No | – | Proxy URL passed to yt-dlp. Useful when a data-center IP is blocked. |
+    | `YTDLP_SOURCE_ADDRESS` | No | – | Local source IP address passed to yt-dlp. |
+    | `YTDLP_USER_AGENT` | No | yt-dlp default | Custom User-Agent for yt-dlp requests. |
+    | `YTDLP_EXTRACTOR_ARGS_JSON` | No | – | JSON object merged into yt-dlp `extractor_args`, for advanced YouTube settings such as PO tokens. |
+    | `YTDLP_SOCKET_TIMEOUT` | No | `30` | yt-dlp socket timeout in seconds. |
+    | `YTDLP_RETRIES` | No | `10` | yt-dlp retry count for downloads/extraction. |
+    | `YTDLP_FRAGMENT_RETRIES` | No | `10` | Retry count for media fragments. |
+    | `YTDLP_EXTRACTOR_RETRIES` | No | `3` | Retry count for extractor failures. |
+    | `YTDLP_REQUEST_DELAY` | No | `0` | Optional delay between yt-dlp HTTP requests. |
+    | `YTDLP_REMOTE_COMPONENTS` | No | – | Set to `true` for `ejs:github`, or provide comma-separated remote components. |
+    | `YTDLP_ANDROID_RETRY` | No | `false` | Enables a last-resort Android client retry after web/default extraction fails. |
     | `WEBDAV_ENABLED` | No | `false` | Enables WebDAV endpoints when set to `true`. |
     | `INITIAL_ADMIN_USERNAME` | No | – | Creates the initial admin user on startup (with password). |
     | `INITIAL_ADMIN_PASSWORD` | No | – | Password for `INITIAL_ADMIN_USERNAME`. |
@@ -117,6 +154,33 @@ YTND Manager is a web-based management interface for downloading and organising 
     cd ..
     ```
     The build output will be placed in `manager-frontend/dist`, which the backend server will serve automatically.
+
+### Server-side YouTube reliability
+
+On servers, install yt-dlp with its default extras so the EJS challenge solver package is available:
+
+```bash
+python -m pip install -U "yt-dlp[default]"
+```
+
+Install a JavaScript runtime for YouTube challenge solving. Deno is preferred by yt-dlp:
+
+```bash
+curl -fsSL https://deno.land/install.sh | sh
+deno --version
+```
+
+Use a Netscape-format `cookies.txt` at `COOKIES_FILE`. For YouTube, export from a fresh private/incognito browser session:
+
+1. Open a private/incognito window and sign in to YouTube.
+2. Visit `https://www.youtube.com/robots.txt`.
+3. Export cookies in Netscape `cookies.txt` format.
+4. Close the private/incognito window and do not keep using that same session in a browser.
+5. Copy the file to the server path configured by `COOKIES_FILE`.
+
+The dashboard shows whether cookies look usable, whether `yt-dlp-ejs` is installed, and which JS runtime is available. Admins can also call `/api/system/youtube-diagnostics?url=...` for a no-download probe that classifies common YouTube failures.
+
+If YouTube blocks the server IP or account session, YTND can diagnose the category and pass proxy/source-address settings to yt-dlp, but it cannot make a flagged data-center IP universally trusted.
 
 ### Running the Application
 

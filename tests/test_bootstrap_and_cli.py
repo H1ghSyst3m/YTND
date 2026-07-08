@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 
@@ -11,11 +10,9 @@ def test_cli_entrypoint_is_registered():
     assert 'ytnd = "ytnd.cli:main"' in pyproject.read_text(encoding="utf-8")
 
 
-def test_initial_admin_bootstrap_uses_generated_uid():
+def test_initial_admin_bootstrap_uses_generated_uid(tmp_path):
     project_root = Path(__file__).resolve().parents[1]
-    tmp_parent = Path("C:/tmp") if os.name == "nt" else Path(tempfile.gettempdir())
-    tmp_parent.mkdir(parents=True, exist_ok=True)
-    data_root = Path(tempfile.mkdtemp(prefix="ytnd_bootstrap_", dir=tmp_parent)) / "data"
+    data_root = tmp_path / "data"
     env = os.environ.copy()
     env.update(
         {

@@ -12,8 +12,17 @@ from mutagen.mp4 import MP4
 from mutagen.oggopus import OggOpus
 import yt_dlp
 
-from .config import FFMPEG_EXECUTABLE, OUTPUT_ROOT, COOKIES_FILE, COVERS_ROOT
+from .config import FFMPEG_EXECUTABLE, OUTPUT_ROOT, COVERS_ROOT
 from .utils import sanitize_filename, sanitize_user_id, logger, get_context_logger, is_youtube_playlist_url, strip_playlist_context
+from .ytdlp_support import (
+    android_retry_enabled,
+    build_ytdlp_options,
+    classify_ytdlp_error,
+    download_workers,
+    item_delay,
+    metadata_workers,
+    sanitize_error,
+)
 from . import database
 
 if TYPE_CHECKING:
@@ -143,7 +152,7 @@ class Downloader:
         final_queue = self._load_queue()
         self.log.bind(step="queue").info("%d URL(s) in Queue", len(final_queue))
 
-    def run(self, workers: int = 4) -> dict:
+    def run(self, workers: Optional[int] = None) -> dict:
         urls = self._load_queue()
         if not urls:
             self.log.bind(step="queue").info("No URLs in queue.")
@@ -162,7 +171,11 @@ class Downloader:
             }
         self.log.bind(step="queue").info("Starting download of %d URL(s)…", len(urls))
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        meta_workers = metadata_workers()
+        work_count = workers if workers is not None else download_workers()
+        delay_seconds = item_delay()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=meta_workers) as pool:
             meta_results = list(pool.map(self._fetch_metadata, urls))
 
         entries: List[_Entry] = []
@@ -177,14 +190,15 @@ class Downloader:
                     "url": src_url,
                     "reason": err or "No metadata",
                     "attempts": 0,
+                    "category": classify_ytdlp_error(err or "No metadata").get("category"),
                 })
                 continue
 
             sub = data.get("entries")
             if sub:
-                entries.extend(_Entry(e) for e in sub if e)
+                entries.extend(_Entry(e, source_url=src_url) for e in sub if e)
             else:
-                entries.append(_Entry(data))
+                entries.append(_Entry(data, source_url=src_url))
 
         raw_count = len(entries)
 
@@ -197,7 +211,7 @@ class Downloader:
 
         if not entries:
             errors = len(failed_meta)
-            self._save_queue([])
+            self._save_queue([item["url"] for item in failed_meta])
             if errors:
                 self.log.bind(step="metadata").warning("%d errors already in metadata phase.", errors)
             else:
@@ -213,37 +227,67 @@ class Downloader:
             self._process_entry(e)
             return e
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_wrap_process, e) for e in entries]
-            total = len(futures)
-            for i, fut in enumerate(concurrent.futures.as_completed(futures), 1):
+        total = len(entries)
+
+        def _handle_success(e: _Entry, i: int) -> None:
+            nonlocal successes
+            successes += 1
+            self.log.bind(step="download").info("Progress: %d/%d", i, total)
+
+        def _handle_download_error(dex: DownloadError, i: int) -> None:
+            nonlocal errors
+            errors += 1
+            failed_list.append({
+                "title": dex.entry.title,
+                "artist": dex.entry.uploader,
+                "url": dex.entry.source_url or dex.entry.url,
+                "reason": dex.msg or "unknown error",
+                "attempts": dex.attempt,
+                "category": classify_ytdlp_error(dex.msg or dex.stderr).get("category"),
+            })
+            self.log.bind(step="download", vid=dex.entry.id).error("Error in entry %d/%d: %s", i, total, dex.msg)
+            if dex.stderr: self.log.bind(step="download", vid=dex.entry.id).error("stderr: %s", _shorten(dex.stderr))
+            if dex.stdout: self.log.bind(step="download", vid=dex.entry.id).info("stdout: %s", _shorten(dex.stdout))
+            self.log.bind(step="download").info("Progress: %d/%d", i, total)
+
+        def _handle_unknown_error(ex: Exception, e: Optional[_Entry], i: int) -> None:
+            nonlocal errors
+            errors += 1
+            failed_list.append({
+                "title": e.title if e else "—",
+                "artist": e.uploader if e else "—",
+                "url": (e.source_url or e.url) if e else "—",
+                "reason": str(ex),
+                "attempts": 1,
+                "category": classify_ytdlp_error(str(ex)).get("category"),
+            })
+            self.log.bind(step="download").error("Error in entry %d/%d: %s", i, total, ex)
+            self.log.bind(step="download").info("Progress: %d/%d", i, total)
+
+        if work_count <= 1:
+            for i, entry in enumerate(entries, 1):
                 try:
-                    fut.result()
-                    successes += 1
+                    _wrap_process(entry)
+                    _handle_success(entry, i)
                 except DownloadError as dex:
-                    errors += 1
-                    failed_list.append({
-                        "title": dex.entry.title,
-                        "artist": dex.entry.uploader,
-                        "url": dex.entry.url,
-                        "reason": dex.msg or "unknown error",
-                        "attempts": dex.attempt,
-                    })
-                    self.log.bind(step="download", vid=dex.entry.id).error("Error in entry %d/%d: %s", i, total, dex.msg)
-                    if dex.stderr: self.log.bind(step="download", vid=dex.entry.id).error("stderr: %s", _shorten(dex.stderr))
-                    if dex.stdout: self.log.bind(step="download", vid=dex.entry.id).info("stdout: %s", _shorten(dex.stdout))
+                    _handle_download_error(dex, i)
                 except Exception as ex:
-                    errors += 1
-                    failed_list.append({
-                        "title": "—",
-                        "artist": "—",
-                        "url": "—",
-                        "reason": str(ex),
-                        "attempts": 1,
-                    })
-                    self.log.bind(step="download").error("Error in entry %d/%d: %s", i, total, ex)
+                    _handle_unknown_error(ex, entry, i)
                 finally:
-                    self.log.bind(step="download").info("Progress: %d/%d", i, total)
+                    if delay_seconds and i < total:
+                        time.sleep(delay_seconds)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=work_count) as pool:
+                future_entries = {pool.submit(_wrap_process, e): e for e in entries}
+                for i, fut in enumerate(concurrent.futures.as_completed(future_entries), 1):
+                    entry = future_entries[fut]
+                    try:
+                        fut.result()
+                        _handle_success(entry, i)
+                    except DownloadError as dex:
+                        _handle_download_error(dex, i)
+                    except Exception as ex:
+                        _handle_unknown_error(ex, entry, i)
 
         if errors:
             self.log.bind(step="download").warning("%d errors occurred.", errors)
@@ -253,7 +297,8 @@ class Downloader:
         except Exception as e:
             self.log.error("Failed to save song cache: %s", e)
         
-        self._save_queue([])
+        failed_urls = {item["url"] for item in failed_meta + failed_list if item.get("url") and item.get("url") != "—"}
+        self._save_queue([url for url in urls if url in failed_urls])
 
         all_failed = failed_meta + failed_list
         return {
@@ -267,16 +312,13 @@ class Downloader:
         is_pl = is_youtube_playlist_url(url)
         eff_url = url if is_pl else strip_playlist_context(url)
 
-        ydl_opts = {
+        ydl_opts = build_ytdlp_options(base={
             'ignoreerrors': False,
             'no_warnings': False,
-            'force_ipv4': True,
             'extract_flat': 'in_playlist' if is_pl else False,
             'playlistend': 150 if is_pl else -1,
             'quiet': True,
-        }
-        if COOKIES_FILE.exists():
-            ydl_opts['cookiefile'] = str(COOKIES_FILE)
+        })
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -285,7 +327,7 @@ class Downloader:
                     return None, "No metadata received"
                 return data, None
         except yt_dlp.utils.DownloadError as e:
-            reason = f"yt-dlp error: {e}"
+            reason = sanitize_error(f"yt-dlp error: {e}")
             self.log.bind(step="metadata", url=eff_url).warning(reason)
             return None, reason
         except Exception as e:
@@ -325,12 +367,11 @@ class Downloader:
             elif d['status'] == 'finished':
                 self._send_progress(entry.url, "processing", title=entry.title, artist=entry.uploader, id=entry.id)
 
-        base_opts = {
+        base_opts = build_ytdlp_options(base={
             'format': 'bestaudio/best',
             'outtmpl': str(temp_tpl),
             'quiet': True,
             'no_warnings': True,
-            'force_ipv4': True,
             'ffmpeg_location': FFMPEG_EXECUTABLE,
             'progress_hooks': [progress_hook],
             'postprocessors': [
@@ -349,9 +390,7 @@ class Downloader:
             ],
             'writethumbnail': True,
             'noprogress': False,
-        }
-        if COOKIES_FILE.exists():
-            base_opts['cookiefile'] = str(COOKIES_FILE)
+        })
 
         def do_download(opts):
             try:
@@ -359,17 +398,21 @@ class Downloader:
                     res_code = ydl.download([entry.url])
                     return res_code, None
             except yt_dlp.utils.DownloadError as de:
-                return 1, str(de)
+                return 1, sanitize_error(str(de))
             except Exception as e:
-                return 1, str(e)
+                return 1, sanitize_error(str(e))
 
         res_code, err_msg = do_download(base_opts)
 
         if res_code != 0:
-            if _needs_android_client(err_msg):
+            if android_retry_enabled() and _needs_android_client(err_msg):
                 time.sleep(0.8)
                 retry_opts = base_opts.copy()
-                retry_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+                extractor_args = dict(retry_opts.get('extractor_args') or {})
+                youtube_args = dict(extractor_args.get('youtube') or {})
+                youtube_args['player_client'] = ['android']
+                extractor_args['youtube'] = youtube_args
+                retry_opts['extractor_args'] = extractor_args
                 res_code, err_msg = do_download(retry_opts)
                 if res_code != 0:
                     self._send_progress(entry.url, "error", title=entry.title, artist=entry.uploader, id=entry.id, error=_shorten(err_msg))
@@ -429,23 +472,20 @@ class Downloader:
                  return (self.cover_dir / f"{entry.id}.{ext}").name
 
         out_tpl = self.cover_dir / f"{entry.id}.%(ext)s"
-        ydl_opts = {
+        ydl_opts = build_ytdlp_options(base={
             'skip_download': True,
             'writethumbnail': True,
             'outtmpl': str(out_tpl),
             'quiet': True,
             'no_warnings': True,
-            'force_ipv4': True,
             'noprogress': True,
-        }
-        if COOKIES_FILE.exists():
-            ydl_opts['cookiefile'] = str(COOKIES_FILE)
+        })
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([entry.url])
         except Exception as e:
-            raise RuntimeError(f"yt-dlp(cover) error: {e}")
+            raise RuntimeError(sanitize_error(f"yt-dlp(cover) error: {e}"))
 
         downloaded_cover = None
         for ext in ("webp", "png", "jpeg", "jpg"):
@@ -541,11 +581,12 @@ class Downloader:
         return any(self.out_dir.glob(f"*{sanitized}*"))
 
 class _Entry:
-    def __init__(self, data: dict):
+    def __init__(self, data: dict, source_url: Optional[str] = None):
         self.id = data.get("id") or data.get("display_id")
         self.title  = data.get("title", "Unknown Title")
         self.uploader = data.get("uploader", "Unknown Artist")
         self.url   = data.get("webpage_url") or data.get("url")
+        self.source_url = source_url or self.url
         self.album = "Nightcore" if "nightcore" in (self.title or "").lower() else None
 
         d = data.get("upload_date")
