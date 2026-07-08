@@ -39,6 +39,7 @@ scripts:
       NODE_VERSION="v24.15.0"
       NPM_VERSION="11.12.1"
       UV_VERSION="0.10.8"
+      DENO_VERSION="v2.3.7"
 
       cd /mnt/server
 
@@ -124,11 +125,19 @@ scripts:
       rm -f /tmp/ffmpeg.tar.xz
 
       echo "Installing Deno runtime for yt-dlp YouTube JS challenges..."
-      curl -fsSL "https://github.com/denoland/deno/releases/latest/download/deno-${DENO_ARCH}.zip" -o /tmp/deno.zip
-      unzip -oq /tmp/deno.zip -d /mnt/server/bin
-      chmod 0755 /mnt/server/bin/deno
       rm -f /tmp/deno.zip
-      echo "Installed Deno version: $(/mnt/server/bin/deno --version | head -n 1)"
+      if curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/deno-${DENO_ARCH}.zip" -o /tmp/deno.zip \
+          && unzip -oq /tmp/deno.zip -d /mnt/server/bin \
+          && chmod 0755 /mnt/server/bin/deno; then
+          if /mnt/server/bin/deno --version >/tmp/deno-version.txt 2>/dev/null; then
+              echo "Installed Deno version: $(head -n 1 /tmp/deno-version.txt)"
+          else
+              echo "WARNING: Deno was downloaded but could not be executed. Configure YTDLP_JS_RUNTIME_PATH manually or reinstall to restore YouTube JS challenge support."
+          fi
+      else
+          echo "WARNING: Deno install failed; continuing without a JavaScript runtime. Configure YTDLP_JS_RUNTIME_PATH manually or reinstall to restore YouTube JS challenge support."
+      fi
+      rm -f /tmp/deno.zip /tmp/deno-version.txt
 
       echo "Installation completed..."
     container: 'python:3.13-slim-bookworm'
@@ -342,6 +351,42 @@ variables:
       - 'between:1,300'
   -
     sort: 18
+    name: 'yt-dlp Retries'
+    description: 'yt-dlp retry count for downloads and extraction.'
+    env_variable: YTDLP_RETRIES
+    default_value: 10
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:0,50'
+  -
+    sort: 19
+    name: 'yt-dlp Fragment Retries'
+    description: 'yt-dlp retry count for media fragments.'
+    env_variable: YTDLP_FRAGMENT_RETRIES
+    default_value: 10
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:0,50'
+  -
+    sort: 20
+    name: 'yt-dlp Extractor Retries'
+    description: 'yt-dlp retry count for extractor failures.'
+    env_variable: YTDLP_EXTRACTOR_RETRIES
+    default_value: 3
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:0,20'
+  -
+    sort: 21
     name: 'yt-dlp Request Delay'
     description: 'Optional delay between yt-dlp HTTP requests in seconds.'
     env_variable: YTDLP_REQUEST_DELAY
@@ -353,7 +398,7 @@ variables:
       - numeric
       - 'between:0,30'
   -
-    sort: 19
+    sort: 22
     name: 'yt-dlp Remote Components'
     description: 'Optional remote EJS components. Use true for ejs:github, or a comma-separated list such as ejs:github,ejs:npm.'
     env_variable: YTDLP_REMOTE_COMPONENTS
@@ -365,7 +410,7 @@ variables:
       - string
       - 'max:255'
   -
-    sort: 20
+    sort: 23
     name: 'yt-dlp Android Retry'
     description: 'Enable a last-resort Android client retry after default extraction fails. Keep disabled unless diagnostics point to it.'
     env_variable: YTDLP_ANDROID_RETRY

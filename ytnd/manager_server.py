@@ -542,6 +542,12 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
 
     return False, "unrecognized response"
 
+
+def _is_youtube_diagnostics_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").rstrip(".").lower()
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
 def _find_cover_file(user_id: str, song: dict) -> Optional[Path]:
     try:
         user_id = sanitize_user_id(user_id)
@@ -830,8 +836,8 @@ def _check_ytdlp_status() -> Dict[str, Any]:
                 result["latest"] = latest_version
                 result["updateAvailable"] = not is_latest
                 return result
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("yt-dlp latest release check failed: %s", exc)
         
         return result
     except Exception:
@@ -1251,6 +1257,8 @@ def api_youtube_diagnostics(url: str, current: dict = Depends(require_session)):
         raise HTTPException(status_code=403, detail="Admin access required")
     if not url or len(url) > 2000:
         raise HTTPException(status_code=400, detail="URL must be between 1 and 2000 characters")
+    if not _is_youtube_diagnostics_url(url):
+        raise HTTPException(status_code=400, detail="YouTube diagnostics only supports youtube.com and youtu.be URLs")
 
     is_pl = is_youtube_playlist_url(url)
     eff_url = url if is_pl else strip_playlist_context(url)

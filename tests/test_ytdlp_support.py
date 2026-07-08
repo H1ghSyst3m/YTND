@@ -138,6 +138,26 @@ def test_cookie_health_reports_auth_present(tmp_path):
     assert status["expiredRows"] == 0
 
 
+def test_cookie_health_counts_httponly_youtube_cookie_rows(tmp_path):
+    expires = int(time.time()) + 3600
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text(
+        "\n".join(
+            [
+                "# Netscape HTTP Cookie File",
+                f"#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t{expires}\tLOGIN_INFO\tlogin",
+                f"#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t{expires}\tSAPISID\tsid",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    status = ytdlp_support.cookie_health(cookies)
+
+    assert status["status"] == "auth_present"
+    assert status["youtubeRows"] == 2
+
+
 def test_cookie_health_reports_malformed_and_no_youtube_cookies(tmp_path):
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("not-a-netscape-row\n.example.com\tTRUE\t/\tTRUE\t0\tfoo\tbar\n", encoding="utf-8")
@@ -190,3 +210,19 @@ def test_classify_ytdlp_error_matches_common_youtube_failures():
     )["category"] == "bot_challenge"
     assert ytdlp_support.classify_ytdlp_error("HTTP Error 403: Forbidden")["category"] == "forbidden"
     assert ytdlp_support.classify_ytdlp_error("HTTP Error 429: Too Many Requests")["category"] == "rate_limited"
+
+
+def test_sanitize_error_redacts_sensitive_headers_and_tokens():
+    message = (
+        "Authorization: Bearer secret-token\n"
+        "Cookie: SID=secret; SAPISID=secret\n"
+        "po_token=web.gvs+secret&next=1 pot=secret-value"
+    )
+
+    sanitized = ytdlp_support.sanitize_error(message)
+
+    assert "Authorization: <redacted>" in sanitized
+    assert "Cookie: <redacted>" in sanitized
+    assert "po_token=<redacted>" in sanitized
+    assert "pot=<redacted>" in sanitized
+    assert "secret" not in sanitized

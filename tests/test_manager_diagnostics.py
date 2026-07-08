@@ -49,6 +49,24 @@ def test_youtube_diagnostics_requires_admin(client, regular_user):
     assert response.status_code == 403
 
 
+def test_youtube_diagnostics_rejects_non_youtube_hosts(client, admin_user, monkeypatch):
+    def fail_youtube_dl(*args, **kwargs):
+        raise AssertionError("YoutubeDL should not be created for non-YouTube diagnostics URLs")
+
+    monkeypatch.setattr(manager_server.yt_dlp, "YoutubeDL", fail_youtube_dl)
+
+    response = client.get(
+        "/api/system/youtube-diagnostics",
+        params={"url": "https://example.com/watch?v=video123"},
+        cookies={
+            SESSION_UID_COOKIE: admin_user["uid"],
+            SESSION_SIG_COOKIE: _sign_uid(admin_user["uid"]),
+        },
+    )
+
+    assert response.status_code == 400
+
+
 def test_probe_uses_shared_ytdlp_options(monkeypatch):
     captured = {}
 

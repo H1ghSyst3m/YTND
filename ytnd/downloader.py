@@ -246,8 +246,10 @@ class Downloader:
                 "category": classify_ytdlp_error(dex.msg or dex.stderr).get("category"),
             })
             self.log.bind(step="download", vid=dex.entry.id).error("Error in entry %d/%d: %s", i, total, dex.msg)
-            if dex.stderr: self.log.bind(step="download", vid=dex.entry.id).error("stderr: %s", _shorten(dex.stderr))
-            if dex.stdout: self.log.bind(step="download", vid=dex.entry.id).info("stdout: %s", _shorten(dex.stdout))
+            if dex.stderr:
+                self.log.bind(step="download", vid=dex.entry.id).error("stderr: %s", _shorten(dex.stderr))
+            if dex.stdout:
+                self.log.bind(step="download", vid=dex.entry.id).info("stdout: %s", _shorten(dex.stdout))
             self.log.bind(step="download").info("Progress: %d/%d", i, total)
 
         def _handle_unknown_error(ex: Exception, e: Optional[_Entry], i: int) -> None:
@@ -278,7 +280,11 @@ class Downloader:
                         time.sleep(delay_seconds)
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=work_count) as pool:
-                future_entries = {pool.submit(_wrap_process, e): e for e in entries}
+                future_entries = {}
+                for submit_index, entry in enumerate(entries):
+                    if delay_seconds and submit_index > 0:
+                        time.sleep(delay_seconds)
+                    future_entries[pool.submit(_wrap_process, entry)] = entry
                 for i, fut in enumerate(concurrent.futures.as_completed(future_entries), 1):
                     entry = future_entries[fut]
                     try:

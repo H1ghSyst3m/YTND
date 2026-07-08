@@ -237,7 +237,11 @@ def _cookie_rows(cookie_file: Path) -> tuple[list[dict[str, str]], int]:
     malformed = 0
     for line in cookie_file.read_text(encoding="utf-8", errors="ignore").splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+        if not stripped:
+            continue
+        if stripped.startswith("#HttpOnly_"):
+            line = stripped.removeprefix("#HttpOnly_")
+        elif stripped.startswith("#"):
             continue
         parts = line.split("\t")
         if len(parts) < 7:
@@ -347,6 +351,16 @@ def classify_ytdlp_error(message: str) -> Dict[str, str]:
 
 
 def sanitize_error(message: str, max_length: int = 600) -> str:
-    text = re.sub(r"(?i)(po_token=|pot=|authorization:|cookie:)[^\s&]+", r"\1<redacted>", message or "")
+    text = message or ""
+    text = re.sub(
+        r"(?i)\b(po_token|pot)=[^\s&]+",
+        lambda match: f"{match.group(1)}=<redacted>",
+        text,
+    )
+    text = re.sub(
+        r"(?im)\b(authorization|cookie)\s*:\s*[^\r\n]*",
+        lambda match: f"{match.group(1)}: <redacted>",
+        text,
+    )
     text = text.strip()
     return text if len(text) <= max_length else text[:max_length] + " …"

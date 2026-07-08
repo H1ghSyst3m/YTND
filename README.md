@@ -133,7 +133,7 @@ YTND Manager is a web-based management interface for downloading and organising 
     | `YTDLP_FRAGMENT_RETRIES` | No | `10` | Retry count for media fragments. |
     | `YTDLP_EXTRACTOR_RETRIES` | No | `3` | Retry count for extractor failures. |
     | `YTDLP_REQUEST_DELAY` | No | `0` | Optional delay between yt-dlp HTTP requests. |
-    | `YTDLP_REMOTE_COMPONENTS` | No | – | Set to `true` for `ejs:github`, or provide comma-separated remote components. |
+    | `YTDLP_REMOTE_COMPONENTS` | No | – | Opt-in remote EJS components. Set to `true` for `ejs:github`, or provide comma-separated values such as `ejs:github,ejs:npm`. This may fetch and execute remote code at yt-dlp runtime; enable only if you accept that supply-chain risk. |
     | `YTDLP_ANDROID_RETRY` | No | `false` | Enables a last-resort Android client retry after web/default extraction fails. |
     | `WEBDAV_ENABLED` | No | `false` | Enables WebDAV endpoints when set to `true`. |
     | `INITIAL_ADMIN_USERNAME` | No | – | Creates the initial admin user on startup (with password). |
@@ -179,6 +179,8 @@ Use a Netscape-format `cookies.txt` at `COOKIES_FILE`. For YouTube, export from 
 5. Copy the file to the server path configured by `COOKIES_FILE`.
 
 The dashboard shows whether cookies look usable, whether `yt-dlp-ejs` is installed, and which JS runtime is available. Admins can also call `/api/system/youtube-diagnostics?url=...` for a no-download probe that classifies common YouTube failures.
+
+`YTDLP_REMOTE_COMPONENTS` is intentionally off by default. Enabling it can let yt-dlp fetch and execute remote EJS components such as `ejs:github` or `ejs:npm` at runtime, so use it only as an explicit operator decision.
 
 If YouTube blocks the server IP or account session, YTND can diagnose the category and pass proxy/source-address settings to yt-dlp, but it cannot make a flagged data-center IP universally trusted.
 

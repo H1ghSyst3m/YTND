@@ -232,3 +232,41 @@ def test_run_keeps_download_failures_in_queue(monkeypatch):
     assert result["errors"] == 1
     assert result["failed"][0]["category"] == "rate_limited"
     assert database.get_queue(uid) == ["https://example.test/bad"]
+
+
+def test_run_staggers_multi_worker_submission(monkeypatch):
+    uid = "queuepaceworkers"
+    try:
+        database.add_user(uid)
+    except ValueError:
+        pass
+
+    urls = [
+        "https://example.test/one",
+        "https://example.test/two",
+        "https://example.test/three",
+    ]
+    database.set_queue(uid, urls)
+
+    def fake_fetch(self, url):
+        return {
+            "id": url.rsplit("/", 1)[-1],
+            "title": url.rsplit("/", 1)[-1],
+            "uploader": "Artist",
+            "webpage_url": url,
+        }, None
+
+    sleeps = []
+    processed = []
+
+    monkeypatch.setenv("YTDLP_ITEM_DELAY", "0.25")
+    monkeypatch.setattr(downloader_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(Downloader, "_fetch_metadata", fake_fetch)
+    monkeypatch.setattr(Downloader, "_process_entry", lambda self, entry: processed.append(entry.source_url))
+
+    result = Downloader(uid).run(workers=3)
+
+    assert result["downloaded"] == 3
+    assert result["errors"] == 0
+    assert sleeps == [0.25, 0.25]
+    assert sorted(processed) == sorted(urls)

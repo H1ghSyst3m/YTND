@@ -1,5 +1,8 @@
 import pytest
-from ytnd.manager_server import _webdav_auth_failures
+from fastapi import HTTPException
+from starlette.requests import Request
+
+from ytnd.manager_server import _webdav_auth_failures, _webdav_reject_traversal_request
 from tests.conftest import _basic_auth_header
 
 
@@ -76,6 +79,35 @@ class TestAccessBoundary:
 # ───────────────────── 3. Path traversal ─────────────────────
 
 class TestTraversal:
+    def _request_for_raw_path(self, raw_path: bytes) -> Request:
+        return Request({
+            "type": "http",
+            "method": "GET",
+            "path": raw_path.decode("utf-8", errors="ignore"),
+            "raw_path": raw_path,
+            "headers": [],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "client": ("testclient", 50000),
+        })
+
+    def test_reject_traversal_guard_handles_percent_encoded_dotdot(self):
+        request = self._request_for_raw_path(b"/webdav/ruser1/%2e%2e/track.opus")
+
+        with pytest.raises(HTTPException) as exc_info:
+            _webdav_reject_traversal_request(request)
+
+        assert exc_info.value.status_code == 400
+
+    def test_reject_traversal_guard_handles_backslash_dotdot(self):
+        request = self._request_for_raw_path(b"/webdav/ruser1/..\\track.opus")
+
+        with pytest.raises(HTTPException) as exc_info:
+            _webdav_reject_traversal_request(request)
+
+        assert exc_info.value.status_code == 400
+
     def test_dotdot_segment_returns_400_or_404(self, client, regular_user, user_folder):
         auth = _basic_auth_header(regular_user["username"], regular_user["password"])
         uid = regular_user["uid"]

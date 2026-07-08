@@ -56,6 +56,14 @@ export interface RecentSong {
   id?: string;
 }
 
+export interface NestedSystemStatus {
+  status: string;
+  version?: string;
+  detail?: string;
+  runtime?: string | null;
+  path?: string | null;
+}
+
 export interface SystemStatus {
   status: string;
   version?: string;
@@ -68,8 +76,8 @@ export interface SystemStatus {
   youtubeRows?: number;
   malformedRows?: number;
   expiredRows?: number;
-  ejsStatus?: SystemStatus;
-  jsRuntime?: SystemStatus;
+  ejsStatus?: NestedSystemStatus;
+  jsRuntime?: NestedSystemStatus;
 }
 
 export interface AdminData {
