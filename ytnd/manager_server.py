@@ -419,6 +419,7 @@ async def api_upload_cookies(
                 detail=status.get("detail", "Invalid cookies file"),
             )
 
+        os.chmod(temp_path, 0o600)
         os.replace(temp_path, target)
     except HTTPException:
         raise

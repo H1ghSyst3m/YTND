@@ -213,12 +213,14 @@ export async function uploadCookiesFile(file: File, csrfToken: string): Promise<
 
   if (!res.ok) {
     let detail = 'Failed to upload cookies file';
-    try {
-      const error = await res.json();
-      if (error?.detail) detail = error.detail;
-    } catch {
-      const text = await res.text().catch(() => '');
-      if (text) detail = text;
+    const text = await res.text().catch(() => '');
+    if (text) {
+      try {
+        const error = JSON.parse(text) as { detail?: unknown };
+        detail = typeof error.detail === 'string' ? error.detail : text;
+      } catch {
+        detail = text;
+      }
     }
     throw new Error(detail);
   }

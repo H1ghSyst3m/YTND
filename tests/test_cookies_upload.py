@@ -49,6 +49,35 @@ def test_admin_can_upload_valid_cookies_file(client, admin_user, monkeypatch, tm
     assert cookies_file.read_text(encoding="utf-8") == VALID_COOKIES
 
 
+def test_valid_cookies_upload_restricts_file_before_replace(client, admin_user, monkeypatch, tmp_path):
+    cookies_file = tmp_path / "cookies.txt"
+    monkeypatch.setattr(manager_module, "COOKIES_FILE", cookies_file)
+    real_chmod = manager_module.os.chmod
+    real_replace = manager_module.os.replace
+    calls = []
+
+    def record_chmod(path, mode):
+        calls.append(("chmod", mode))
+        real_chmod(path, mode)
+
+    def record_replace(src, dst):
+        calls.append(("replace", None))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(manager_module.os, "chmod", record_chmod)
+    monkeypatch.setattr(manager_module.os, "replace", record_replace)
+
+    response = _upload(
+        client,
+        admin_user,
+        VALID_COOKIES,
+        _generate_csrf_token(admin_user["uid"]),
+    )
+
+    assert response.status_code == 200
+    assert calls[:2] == [("chmod", 0o600), ("replace", None)]
+
+
 def test_invalid_cookies_upload_does_not_replace_existing_file(client, admin_user, monkeypatch, tmp_path):
     cookies_file = tmp_path / "cookies.txt"
     cookies_file.write_text(VALID_COOKIES, encoding="utf-8")
