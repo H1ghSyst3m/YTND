@@ -4,6 +4,7 @@ Downloader with persistent queue managed via database.
 """
 from __future__ import annotations
 import json, uuid, concurrent.futures, time, subprocess, shutil, os, re
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 from mutagen.flac import FLAC
@@ -68,9 +69,10 @@ def _runtime_name_from_path(path: str) -> str:
         return name
     return "deno"
 
-def _find_runtime_executable(runtime: str) -> Optional[str]:
+@lru_cache(maxsize=32)
+def _find_runtime_executable(runtime: str, search_path: str) -> Optional[str]:
     for binary in JS_RUNTIME_BINARIES.get(runtime, (runtime,)):
-        found = shutil.which(binary)
+        found = shutil.which(binary, path=search_path)
         if found:
             return found
     return None
@@ -79,6 +81,7 @@ def get_js_runtime_status() -> Dict[str, str]:
     explicit_path = os.getenv("YTND_JS_RUNTIME_PATH", "").strip()
     raw_runtime = os.getenv("YTND_JS_RUNTIME", "auto").strip().lower()
     explicit_runtime = _runtime_name_from_value(raw_runtime)
+    search_path = os.getenv("PATH", "")
 
     if raw_runtime not in ("", "auto") and explicit_runtime is None:
         return {"status": "error", "detail": f"Unsupported JavaScript runtime: {raw_runtime}"}
@@ -97,7 +100,7 @@ def get_js_runtime_status() -> Dict[str, str]:
         return {"status": "ok", "runtime": runtime, "path": explicit_path}
 
     if explicit_runtime:
-        found = _find_runtime_executable(explicit_runtime)
+        found = _find_runtime_executable(explicit_runtime, search_path)
         if found:
             return {"status": "ok", "runtime": explicit_runtime, "path": found}
         return {
@@ -107,7 +110,7 @@ def get_js_runtime_status() -> Dict[str, str]:
         }
 
     for runtime in JS_RUNTIME_ORDER:
-        found = _find_runtime_executable(runtime)
+        found = _find_runtime_executable(runtime, search_path)
         if found:
             return {"status": "ok", "runtime": runtime, "path": found}
 
@@ -696,8 +699,10 @@ class Downloader:
                 return clean_ytdlp_message(f"{capture.text()} {e}")
 
         use_cookies = _should_use_cookies()
+        retried_without_cookies = False
         cover_error = download_cover(use_cookies)
         if cover_error and use_cookies and _is_invalid_cookie_error(cover_error):
+            retried_without_cookies = True
             self.log.bind(step="cover", vid=entry.id).warning(
                 "Cookie file appears invalid; retrying cover download without cookies"
             )
@@ -708,7 +713,10 @@ class Downloader:
                 cover_error = None
 
         if cover_error:
-            raise RuntimeError(f"yt-dlp(cover) error: {classify_yt_dlp_error(cover_error)}")
+            raise RuntimeError(
+                "yt-dlp(cover) error: "
+                f"{classify_yt_dlp_error(cover_error, retried_without_cookies=retried_without_cookies)}"
+            )
 
         downloaded_cover = None
         for ext in ("webp", "png", "jpeg", "jpg"):

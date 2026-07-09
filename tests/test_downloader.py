@@ -2,6 +2,8 @@ from pathlib import Path
 from types import SimpleNamespace
 import subprocess
 
+import pytest
+
 from ytnd import database
 from ytnd.downloader import Downloader
 import ytnd.downloader as downloader_module
@@ -71,6 +73,7 @@ def test_save_cover_allows_ffmpeg_from_path(monkeypatch):
 
 
 def test_yt_dlp_options_use_configured_deno_path(monkeypatch, tmp_path):
+    downloader_module._find_runtime_executable.cache_clear()
     deno = tmp_path / "deno"
     deno.write_text("", encoding="utf-8")
 
@@ -84,17 +87,64 @@ def test_yt_dlp_options_use_configured_deno_path(monkeypatch, tmp_path):
 
 
 def test_yt_dlp_options_fall_back_to_node_when_deno_is_missing(monkeypatch):
+    downloader_module._find_runtime_executable.cache_clear()
     monkeypatch.delenv("YTND_JS_RUNTIME_PATH", raising=False)
     monkeypatch.delenv("YTND_JS_RUNTIME", raising=False)
 
-    def fake_which(binary):
+    def fake_which(binary, path=None):
         return "C:/node/node.exe" if binary == "node" else None
 
     monkeypatch.setattr(downloader_module.shutil, "which", fake_which)
 
-    opts = downloader_module.apply_yt_dlp_defaults({}, use_cookies=False)
+    try:
+        opts = downloader_module.apply_yt_dlp_defaults({}, use_cookies=False)
+        assert opts["js_runtimes"] == {"node": {"path": "C:/node/node.exe"}}
+    finally:
+        downloader_module._find_runtime_executable.cache_clear()
 
-    assert opts["js_runtimes"] == {"node": {"path": "C:/node/node.exe"}}
+
+def test_runtime_lookup_is_cached_while_path_is_unchanged(monkeypatch):
+    downloader_module._find_runtime_executable.cache_clear()
+    monkeypatch.delenv("YTND_JS_RUNTIME_PATH", raising=False)
+    monkeypatch.delenv("YTND_JS_RUNTIME", raising=False)
+
+    calls = []
+
+    def fake_which(binary, path=None):
+        calls.append((binary, path))
+        return "C:/node/node.exe" if binary == "node" else None
+
+    monkeypatch.setattr(downloader_module.shutil, "which", fake_which)
+
+    try:
+        first = downloader_module.apply_yt_dlp_defaults({}, use_cookies=False)
+        second = downloader_module.apply_yt_dlp_defaults({}, use_cookies=False)
+
+        assert first["js_runtimes"] == {"node": {"path": "C:/node/node.exe"}}
+        assert second["js_runtimes"] == {"node": {"path": "C:/node/node.exe"}}
+        assert [binary for binary, _ in calls] == ["deno", "node"]
+    finally:
+        downloader_module._find_runtime_executable.cache_clear()
+
+
+def test_cookie_detection_remains_uncached(monkeypatch, tmp_path):
+    deno = tmp_path / "deno"
+    deno.write_text("", encoding="utf-8")
+    cookie_file = tmp_path / "cookies.txt"
+
+    monkeypatch.setenv("YTND_JS_RUNTIME_PATH", str(deno))
+    monkeypatch.setattr(downloader_module, "COOKIES_FILE", cookie_file)
+
+    first = downloader_module.apply_yt_dlp_defaults({}, use_cookies=True)
+    cookie_file.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tSID\tvalue\n",
+        encoding="utf-8",
+    )
+    second = downloader_module.apply_yt_dlp_defaults({}, use_cookies=True)
+
+    assert "cookiefile" not in first
+    assert second["cookiefile"] == str(cookie_file)
 
 
 def test_cookie_status_validates_netscape_file(monkeypatch, tmp_path):
@@ -164,6 +214,81 @@ def test_fetch_metadata_retries_without_invalid_cookies(monkeypatch, tmp_path):
     assert data["id"] == "video123"
     assert "cookiefile" in calls[0]
     assert "cookiefile" not in calls[1]
+
+
+def test_probe_preserves_retry_without_cookies_note(monkeypatch, tmp_path):
+    deno = tmp_path / "deno"
+    deno.write_text("", encoding="utf-8")
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tSID\tvalue\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("YTND_JS_RUNTIME_PATH", str(deno))
+    monkeypatch.setattr(downloader_module, "COOKIES_FILE", cookie_file)
+
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, url, download):
+            if "cookiefile" in self.opts:
+                self.opts["logger"].warning("The provided YouTube account cookies are no longer valid")
+                raise manager_module.yt_dlp.utils.DownloadError("cookies failed")
+            raise manager_module.yt_dlp.utils.DownloadError("retry still failed")
+
+    monkeypatch.setattr(manager_module.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+
+    ok, reason = manager_module._probe_url_available("https://youtube.com/watch?v=video123")
+
+    assert ok is False
+    assert "Retried without cookies" in reason
+
+
+def test_save_cover_preserves_retry_without_cookies_note(monkeypatch, tmp_path):
+    deno = tmp_path / "deno"
+    deno.write_text("", encoding="utf-8")
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".youtube.com\tTRUE\t/\tFALSE\t0\tSID\tvalue\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("YTND_JS_RUNTIME_PATH", str(deno))
+    monkeypatch.setattr(downloader_module, "COOKIES_FILE", cookie_file)
+
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, urls):
+            if "cookiefile" in self.opts:
+                self.opts["logger"].warning("The provided YouTube account cookies are no longer valid")
+                raise downloader_module.yt_dlp.utils.DownloadError("cookies failed")
+            raise downloader_module.yt_dlp.utils.DownloadError("retry still failed")
+
+    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+
+    downloader = Downloader("coverretry")
+    entry = SimpleNamespace(id="video456", url="https://example.test/watch?v=video456")
+
+    with pytest.raises(RuntimeError, match="Retried without cookies"):
+        downloader._save_cover(entry)
 
 
 def test_yt_dlp_error_classification_reports_missing_js_runtime():

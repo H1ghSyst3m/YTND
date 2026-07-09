@@ -531,8 +531,10 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
             return None, f"{capture.text()} {e}"
 
     use_cookies = get_cookies_status().get("status") == "present"
+    retried_without_cookies = False
     data, err = probe(use_cookies)
     if err and use_cookies and _is_invalid_cookie_error(err):
+        retried_without_cookies = True
         data, retry_err = probe(False)
         if retry_err:
             err = f"{err} {retry_err}"
@@ -540,7 +542,8 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
             err = None
 
     if err:
-        return False, f"yt-dlp error: {classify_yt_dlp_error(err)[:200]}"
+        reason = classify_yt_dlp_error(err, retried_without_cookies=retried_without_cookies)
+        return False, f"yt-dlp error: {reason[:200]}"
 
     if not data:
         return False, "empty response"

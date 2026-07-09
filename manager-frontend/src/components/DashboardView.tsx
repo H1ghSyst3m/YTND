@@ -1,8 +1,47 @@
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { Music, Download, Users, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import * as api from '../lib/api';
+
+function getStatusIcon(status: string) {
+  switch (status) {
+    case 'ok':
+    case 'present':
+      return <CheckCircle className="h-5 w-5 text-green-500" />;
+    case 'error':
+    case 'missing':
+    case 'empty':
+    case 'invalid':
+      return <XCircle className="h-5 w-5 text-red-500" />;
+    default:
+      return <AlertCircle className="h-5 w-5 text-yellow-500" />;
+  }
+}
+
+interface StatusCardProps {
+  status: string;
+  label: string;
+  children?: ReactNode;
+  trailing?: ReactNode;
+  iconGap?: 'gap-2' | 'gap-3';
+}
+
+function StatusCard({ status, label, children, trailing, iconGap = 'gap-2' }: StatusCardProps) {
+  return (
+    <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
+      <div className={trailing ? 'flex items-center justify-between gap-3' : 'flex items-center gap-2'}>
+        <div className={`flex items-center ${iconGap} flex-1 min-w-0`}>
+          {getStatusIcon(status)}
+          <p className="font-medium text-sm sm:text-base">{label}</p>
+        </div>
+        {trailing}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 function DashboardView() {
   const { data, isLoading } = useQuery({
@@ -17,21 +56,6 @@ function DashboardView() {
   if (!data) {
     return <div className="text-center py-8">No data available</div>;
   }
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'ok':
-      case 'present':
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
-      case 'error':
-      case 'missing':
-      case 'empty':
-      case 'invalid':
-        return <XCircle className="h-5 w-5 text-red-500" />;
-      default:
-        return <AlertCircle className="h-5 w-5 text-yellow-500" />;
-    }
-  };
 
   return (
     <motion.div
@@ -123,14 +147,7 @@ function DashboardView() {
                   <span className="text-base sm:text-lg font-bold">{data.adminData.totalUsers}</span>
                 </div>
 
-                {/* yt-dlp Status */}
-                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      {getStatusIcon(data.adminData.ytDlpStatus.status)}
-                      <p className="font-medium text-sm sm:text-base">yt-dlp</p>
-                    </div>
-                  </div>
+                <StatusCard status={data.adminData.ytDlpStatus.status} label="yt-dlp">
                   {data.adminData.ytDlpStatus.version && (
                     <p className="text-xs text-muted-foreground break-words">
                       {data.adminData.ytDlpStatus.version}
@@ -141,52 +158,41 @@ function DashboardView() {
                       )}
                     </p>
                   )}
-                </div>
+                </StatusCard>
 
-                {/* FFmpeg Status */}
-                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
-                  <div className="flex items-center gap-2">
-                    {getStatusIcon(data.adminData.ffmpegStatus.status)}
-                    <p className="font-medium text-sm sm:text-base">FFmpeg</p>
-                  </div>
+                <StatusCard status={data.adminData.ffmpegStatus.status} label="FFmpeg">
                   {data.adminData.ffmpegStatus.version && (
                     <p className="text-xs text-muted-foreground truncate">
                       {data.adminData.ffmpegStatus.version.substring(0, 50)}
                     </p>
                   )}
-                </div>
+                </StatusCard>
 
-                {/* JavaScript Runtime Status */}
-                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
-                  <div className="flex items-center gap-2">
-                    {getStatusIcon(data.adminData.jsRuntimeStatus.status)}
-                    <p className="font-medium text-sm sm:text-base">JS Runtime</p>
-                  </div>
+                <StatusCard status={data.adminData.jsRuntimeStatus.status} label="JS Runtime">
                   <p className="text-xs text-muted-foreground break-words">
                     {data.adminData.jsRuntimeStatus.runtime || data.adminData.jsRuntimeStatus.status}
                     {data.adminData.jsRuntimeStatus.detail && (
                       <span className="block">{data.adminData.jsRuntimeStatus.detail}</span>
                     )}
                   </p>
-                </div>
+                </StatusCard>
 
-                {/* Cookies Status */}
-                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      {getStatusIcon(data.adminData.cookiesStatus.status)}
-                      <span className="font-medium text-sm sm:text-base">Cookies File</span>
-                    </div>
+                <StatusCard
+                  status={data.adminData.cookiesStatus.status}
+                  label="Cookies File"
+                  iconGap="gap-3"
+                  trailing={
                     <span className="text-xs sm:text-sm text-muted-foreground">
                       {data.adminData.cookiesStatus.status}
                     </span>
-                  </div>
+                  }
+                >
                   {data.adminData.cookiesStatus.detail && (
                     <p className="text-xs text-muted-foreground break-words">
                       {data.adminData.cookiesStatus.detail}
                     </p>
                   )}
-                </div>
+                </StatusCard>
 
                 {/* Log Summary */}
                 <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
