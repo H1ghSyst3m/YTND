@@ -185,7 +185,7 @@ function MainApp() {
             >
               <div className="p-4 sm:p-6 border-b border-border">
                 <div className="flex items-center gap-2">
-                  <img src="/logo.svg" alt="YTND logo" className="h-12 w-12 rounded-lg object-contain" />
+                  <img src="/logo.png" alt="YTND logo" className="h-12 w-12 rounded-lg object-contain" />
                   <h1 className="text-xl sm:text-2xl font-bold">Manager</h1>
                 </div>
               </div>

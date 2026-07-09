@@ -51,7 +51,7 @@ export default function SetupView() {
         <Card className="w-full max-w-md p-8">
           <div className="flex flex-col items-center mb-8">
             <div className="bg-primary/10 p-4 rounded-full mb-4">
-              <img src="/logo.svg" alt="YTND logo" className="h-12 w-12 rounded-lg object-contain" />
+              <img src="/logo.png" alt="YTND logo" className="h-12 w-12 rounded-lg object-contain" />
             </div>
             <h1 className="text-3xl font-bold text-center">YTND Manager</h1>
             <p className="text-muted-foreground text-center mt-2">
