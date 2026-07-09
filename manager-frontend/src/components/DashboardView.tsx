@@ -25,6 +25,8 @@ function DashboardView() {
         return <CheckCircle className="h-5 w-5 text-green-500" />;
       case 'error':
       case 'missing':
+      case 'empty':
+      case 'invalid':
         return <XCircle className="h-5 w-5 text-red-500" />;
       default:
         return <AlertCircle className="h-5 w-5 text-yellow-500" />;
@@ -154,15 +156,36 @@ function DashboardView() {
                   )}
                 </div>
 
-                {/* Cookies Status */}
-                <div className="flex items-center justify-between p-3 bg-muted rounded-lg">
-                  <div className="flex items-center gap-3">
-                    {getStatusIcon(data.adminData.cookiesStatus.status)}
-                    <span className="font-medium text-sm sm:text-base">Cookies File</span>
+                {/* JavaScript Runtime Status */}
+                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
+                  <div className="flex items-center gap-2">
+                    {getStatusIcon(data.adminData.jsRuntimeStatus.status)}
+                    <p className="font-medium text-sm sm:text-base">JS Runtime</p>
                   </div>
-                  <span className="text-xs sm:text-sm text-muted-foreground">
-                    {data.adminData.cookiesStatus.status}
-                  </span>
+                  <p className="text-xs text-muted-foreground break-words">
+                    {data.adminData.jsRuntimeStatus.runtime || data.adminData.jsRuntimeStatus.status}
+                    {data.adminData.jsRuntimeStatus.detail && (
+                      <span className="block">{data.adminData.jsRuntimeStatus.detail}</span>
+                    )}
+                  </p>
+                </div>
+
+                {/* Cookies Status */}
+                <div className="flex flex-col p-3 bg-muted rounded-lg gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      {getStatusIcon(data.adminData.cookiesStatus.status)}
+                      <span className="font-medium text-sm sm:text-base">Cookies File</span>
+                    </div>
+                    <span className="text-xs sm:text-sm text-muted-foreground">
+                      {data.adminData.cookiesStatus.status}
+                    </span>
+                  </div>
+                  {data.adminData.cookiesStatus.detail && (
+                    <p className="text-xs text-muted-foreground break-words">
+                      {data.adminData.cookiesStatus.detail}
+                    </p>
+                  )}
                 </div>
 
                 {/* Log Summary */}

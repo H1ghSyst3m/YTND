@@ -21,7 +21,7 @@ docker_images:
 file_denylist: {  }
 startup_commands:
   Default: >-
-    bash -lc 'if [ -z "${MANAGER_BASE_URL:-}" ]; then unset MANAGER_BASE_URL; fi; export MANAGER_HOST=0.0.0.0; export MANAGER_PORT={{SERVER_PORT}}; export DATA_ROOT=/home/container/data; export DATABASE_FILE=/home/container/data/ytnd.db; export COOKIES_FILE=/home/container/data/cookies.txt; export FFMPEG_PATH=/home/container/bin/ffmpeg; echo "Checking yt-dlp update..."; /home/container/.venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true; if /home/container/.venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir --upgrade "yt-dlp"; then echo "yt-dlp version: $(/home/container/.venv/bin/python -m yt_dlp --version)"; else echo "WARNING: yt-dlp update failed; continuing with installed version"; fi; exec /home/container/.venv/bin/python -m ytnd.manager_server'
+    bash -lc 'if [ -z "${MANAGER_BASE_URL:-}" ]; then unset MANAGER_BASE_URL; fi; export PATH=/home/container/bin:${PATH}; export MANAGER_HOST=0.0.0.0; export MANAGER_PORT={{SERVER_PORT}}; export DATA_ROOT=/home/container/data; export DATABASE_FILE=/home/container/data/ytnd.db; export COOKIES_FILE=/home/container/data/cookies.txt; export FFMPEG_PATH=/home/container/bin/ffmpeg; export YTND_JS_RUNTIME_PATH=/home/container/bin/deno; if [ -x "$YTND_JS_RUNTIME_PATH" ]; then echo "Deno version: $($YTND_JS_RUNTIME_PATH --version | head -n 1)"; else echo "WARNING: Deno runtime missing at $YTND_JS_RUNTIME_PATH"; fi; echo "Checking yt-dlp update..."; /home/container/.venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true; if /home/container/.venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir --upgrade "yt-dlp[default]"; then echo "yt-dlp version: $(/home/container/.venv/bin/python -m yt_dlp --version)"; else echo "WARNING: yt-dlp update failed; continuing with installed version"; fi; exec /home/container/.venv/bin/python -m ytnd.manager_server'
 config:
   files: {  }
   startup:
@@ -39,6 +39,7 @@ scripts:
       NODE_VERSION="v24.15.0"
       NPM_VERSION="11.12.1"
       UV_VERSION="0.10.8"
+      DENO_VERSION="v2.9.2"
 
       cd /mnt/server
 
@@ -50,6 +51,7 @@ scripts:
           git \
           rsync \
           tar \
+          unzip \
           xz-utils
       rm -rf /var/lib/apt/lists/*
 
@@ -58,10 +60,12 @@ scripts:
           x86_64|amd64)
               NODE_ARCH="x64"
               FFMPEG_ARCH="amd64"
+              DENO_ARCH="x86_64-unknown-linux-gnu"
               ;;
           aarch64|arm64)
               NODE_ARCH="arm64"
               FFMPEG_ARCH="arm64"
+              DENO_ARCH="aarch64-unknown-linux-gnu"
               ;;
           *)
               echo "Unsupported architecture: ${ARCH}"
@@ -76,6 +80,18 @@ scripts:
       rm -f /tmp/node.tar.xz
       export PATH="/opt/node-${NODE_VERSION}-linux-${NODE_ARCH}/bin:${PATH}"
       npm install -g "npm@${NPM_VERSION}"
+
+      echo "Installing Deno ${DENO_VERSION}..."
+      mkdir -p /mnt/server/bin
+      DENO_ASSET="deno-${DENO_ARCH}.zip"
+      curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${DENO_ASSET}" -o "/tmp/${DENO_ASSET}"
+      curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${DENO_ASSET}.sha256sum" -o "/tmp/${DENO_ASSET}.sha256sum"
+      (cd /tmp && sha256sum -c "${DENO_ASSET}.sha256sum")
+      rm -f /mnt/server/bin/deno
+      unzip -p "/tmp/${DENO_ASSET}" deno > /mnt/server/bin/deno
+      chmod 0755 /mnt/server/bin/deno
+      rm -f "/tmp/${DENO_ASSET}" "/tmp/${DENO_ASSET}.sha256sum"
+      /mnt/server/bin/deno --version
 
       echo "Fetching YTND from https://github.com/H1ghSyst3m/YTND.git (main)..."
       rm -rf /tmp/ytnd-src
@@ -100,7 +116,7 @@ scripts:
       python -m uv sync --frozen --no-dev
 
       echo "Updating yt-dlp to the latest PyPI release..."
-      python -m uv pip install --python /mnt/server/.venv/bin/python --upgrade "pip" "yt-dlp"
+      python -m uv pip install --python /mnt/server/.venv/bin/python --upgrade "pip" "yt-dlp[default]"
       echo "Installed yt-dlp version: $(/mnt/server/.venv/bin/python -m yt_dlp --version)"
 
       echo "Building manager frontend..."

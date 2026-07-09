@@ -57,9 +57,11 @@ export interface RecentSong {
 }
 
 export interface SystemStatus {
-  status: 'ok' | 'error' | 'present' | 'missing';
+  status: 'ok' | 'error' | 'present' | 'missing' | 'empty' | 'invalid';
   version?: string;
   detail?: string;
+  runtime?: string;
+  path?: string;
   latest?: string;
   updateAvailable?: boolean;
 }
@@ -68,6 +70,7 @@ export interface AdminData {
   totalUsers: number;
   ytDlpStatus: SystemStatus;
   ffmpegStatus: SystemStatus;
+  jsRuntimeStatus: SystemStatus;
   cookiesStatus: SystemStatus;
   logSummary: {
     error: number;

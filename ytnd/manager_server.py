@@ -20,7 +20,6 @@ from passlib.context import CryptContext
 
 from .config import (
     OUTPUT_ROOT,
-    COOKIES_FILE,
     COVERS_ROOT,
     LOG_DIR,
     MANAGER_HOST,
@@ -28,7 +27,15 @@ from .config import (
     MANAGER_SECRET,
     WEBDAV_ENABLED,
 )
-from .downloader import Downloader
+from .downloader import (
+    Downloader,
+    YtDlpCaptureLogger,
+    apply_yt_dlp_defaults,
+    classify_yt_dlp_error,
+    get_cookies_status,
+    get_js_runtime_status,
+    _is_invalid_cookie_error,
+)
 from .utils import sanitize_filename, sanitize_user_id, is_youtube_playlist_url, strip_playlist_context, logger
 from . import database
 
@@ -505,22 +512,35 @@ def _probe_url_available(url: str) -> Tuple[bool, str]:
     is_pl = is_youtube_playlist_url(url)
     eff_url = url if is_pl else strip_playlist_context(url)
 
-    ydl_opts = {
+    base_opts = {
         'quiet': True,
         'no_warnings': True,
         'extract_flat': 'in_playlist' if is_pl else False,
         'socket_timeout': 30,
     }
-    if COOKIES_FILE.exists():
-        ydl_opts['cookiefile'] = str(COOKIES_FILE)
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            data = ydl.extract_info(eff_url, download=False)
-    except yt_dlp.utils.DownloadError as e:
-        return False, f"yt-dlp error: {str(e)[:200]}"
-    except Exception as e:
-        return False, f"Probe failed: {str(e)[:200]}"
+    def probe(use_cookies: bool):
+        capture = YtDlpCaptureLogger()
+        opts = apply_yt_dlp_defaults(base_opts, use_cookies=use_cookies, capture_logger=capture)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(eff_url, download=False), None
+        except yt_dlp.utils.DownloadError as e:
+            return None, f"{capture.text()} {e}"
+        except Exception as e:
+            return None, f"{capture.text()} {e}"
+
+    use_cookies = get_cookies_status().get("status") == "present"
+    data, err = probe(use_cookies)
+    if err and use_cookies and _is_invalid_cookie_error(err):
+        data, retry_err = probe(False)
+        if retry_err:
+            err = f"{err} {retry_err}"
+        else:
+            err = None
+
+    if err:
+        return False, f"yt-dlp error: {classify_yt_dlp_error(err)[:200]}"
 
     if not data:
         return False, "empty response"
@@ -822,10 +842,8 @@ def _check_ffmpeg_status() -> Dict[str, str]:
         return {"status": "error", "version": "not found"}
 
 def _check_cookies_status() -> Dict[str, str]:
-    """Check if cookies file exists."""
-    if COOKIES_FILE.exists():
-        return {"status": "present"}
-    return {"status": "missing"}
+    """Check if cookies file exists and looks usable."""
+    return get_cookies_status()
 
 def _get_log_summary() -> Dict[str, int]:
     """Get summary of log entries by severity from the last 24 hours."""
@@ -907,6 +925,7 @@ def api_dashboard(current: dict = Depends(require_session)):
             "totalUsers": len(users),
             "ytDlpStatus": _check_ytdlp_status(),
             "ffmpegStatus": _check_ffmpeg_status(),
+            "jsRuntimeStatus": get_js_runtime_status(),
             "cookiesStatus": _check_cookies_status(),
             "logSummary": _get_log_summary(),
         }
