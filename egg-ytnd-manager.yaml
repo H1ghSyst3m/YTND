@@ -81,18 +81,6 @@ scripts:
       export PATH="/opt/node-${NODE_VERSION}-linux-${NODE_ARCH}/bin:${PATH}"
       npm install -g "npm@${NPM_VERSION}"
 
-      echo "Installing Deno ${DENO_VERSION}..."
-      mkdir -p /mnt/server/bin
-      DENO_ASSET="deno-${DENO_ARCH}.zip"
-      curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${DENO_ASSET}" -o "/tmp/${DENO_ASSET}"
-      curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${DENO_ASSET}.sha256sum" -o "/tmp/${DENO_ASSET}.sha256sum"
-      (cd /tmp && sha256sum -c "${DENO_ASSET}.sha256sum")
-      rm -f /mnt/server/bin/deno
-      unzip -p "/tmp/${DENO_ASSET}" deno > /mnt/server/bin/deno
-      chmod 0755 /mnt/server/bin/deno
-      rm -f "/tmp/${DENO_ASSET}" "/tmp/${DENO_ASSET}.sha256sum"
-      /mnt/server/bin/deno --version
-
       echo "Fetching YTND from https://github.com/H1ghSyst3m/YTND.git (main)..."
       rm -rf /tmp/ytnd-src
       git clone --depth 1 --branch main "https://github.com/H1ghSyst3m/YTND.git" /tmp/ytnd-src
@@ -109,6 +97,20 @@ scripts:
       rm -rf /tmp/ytnd-src
 
       mkdir -p data bin
+
+      # Install generated runtime binaries after rsync --delete so they remain persisted.
+      echo "Installing Deno ${DENO_VERSION}..."
+      DENO_ASSET="deno-${DENO_ARCH}.zip"
+      curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${DENO_ASSET}" -o "/tmp/${DENO_ASSET}"
+      curl -fsSL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/${DENO_ASSET}.sha256sum" -o "/tmp/${DENO_ASSET}.sha256sum"
+      (cd /tmp && sha256sum -c "${DENO_ASSET}.sha256sum")
+      rm -f /mnt/server/bin/deno /mnt/server/bin/deno.tmp
+      unzip -p "/tmp/${DENO_ASSET}" deno > /mnt/server/bin/deno.tmp
+      chmod 0755 /mnt/server/bin/deno.tmp
+      mv /mnt/server/bin/deno.tmp /mnt/server/bin/deno
+      rm -f "/tmp/${DENO_ASSET}" "/tmp/${DENO_ASSET}.sha256sum"
+      test -x /mnt/server/bin/deno
+      /mnt/server/bin/deno --version
 
       echo "Installing uv ${UV_VERSION} and Python dependencies..."
       python -m pip install --no-cache-dir --upgrade pip
@@ -135,6 +137,11 @@ scripts:
           "${FFMPEG_ROOT}/ffprobe"
       chmod 0755 /mnt/server/bin/ffmpeg /mnt/server/bin/ffprobe
       rm -f /tmp/ffmpeg.tar.xz
+
+      test -x /mnt/server/bin/deno
+      /mnt/server/bin/deno --version
+      test -x /mnt/server/bin/ffmpeg
+      /mnt/server/bin/ffmpeg -version | head -n 1
 
       echo "Installation completed..."
     container: 'python:3.13-slim-bookworm'

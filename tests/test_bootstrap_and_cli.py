@@ -11,6 +11,27 @@ def test_cli_entrypoint_is_registered():
     assert 'ytnd = "ytnd.cli:main"' in pyproject.read_text(encoding="utf-8")
 
 
+def test_pelican_egg_installs_deno_after_destructive_repo_sync():
+    egg = Path(__file__).resolve().parents[1] / "egg-ytnd-manager.yaml"
+    content = egg.read_text(encoding="utf-8")
+
+    sync_idx = content.index("rsync -a --delete")
+    mkdir_idx = content.index("mkdir -p data bin")
+    deno_idx = content.index('echo "Installing Deno ${DENO_VERSION}..."')
+    ffmpeg_idx = content.index('echo "Installing static FFmpeg..."')
+    final_deno_check_idx = content.rindex("test -x /mnt/server/bin/deno")
+    done_idx = content.index('echo "Installation completed..."')
+
+    assert "export YTND_JS_RUNTIME_PATH=/home/container/bin/deno" in content
+    assert content.count('echo "Installing Deno ${DENO_VERSION}..."') == 1
+    assert sync_idx < mkdir_idx < deno_idx < done_idx
+    assert "sha256sum -c" in content
+    assert 'unzip -p "/tmp/${DENO_ASSET}" deno > /mnt/server/bin/deno.tmp' in content
+    assert "mv /mnt/server/bin/deno.tmp /mnt/server/bin/deno" in content
+    assert ffmpeg_idx < final_deno_check_idx < done_idx
+    assert "test -x /mnt/server/bin/ffmpeg" in content
+
+
 def test_initial_admin_bootstrap_uses_generated_uid():
     project_root = Path(__file__).resolve().parents[1]
     tmp_parent = Path("C:/tmp") if os.name == "nt" else Path(tempfile.gettempdir())
