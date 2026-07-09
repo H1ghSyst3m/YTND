@@ -3,7 +3,8 @@
 Downloader with persistent queue managed via database.
 """
 from __future__ import annotations
-import json, uuid, concurrent.futures, time, subprocess, shutil
+import json, uuid, concurrent.futures, time, subprocess, shutil, os, re
+from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 from mutagen.flac import FLAC
@@ -20,9 +21,17 @@ if TYPE_CHECKING:
     from typing import Any
 
 AUDIO_EXTENSIONS = {".opus", ".mp3", ".m4a", ".flac", ".ogg"}
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+COOKIE_HEADERS = ("# HTTP Cookie File", "# Netscape HTTP Cookie File")
+JS_RUNTIME_ORDER = ("deno", "node", "quickjs")
+JS_RUNTIME_BINARIES = {
+    "deno": ("deno",),
+    "node": ("node",),
+    "quickjs": ("qjs", "quickjs"),
+}
 
 def _shorten(s: str, maxlen: int = 600) -> str:
-    s = (s or "").strip()
+    s = clean_ytdlp_message(s)
     return s if len(s) <= maxlen else s[:maxlen] + " …"
 
 def _needs_android_client(stderr_out: str) -> bool:
@@ -33,6 +42,209 @@ def _needs_android_client(stderr_out: str) -> bool:
             "too many requests" in t or
             "sign in to confirm your age" in t or
             "playback on other websites has been disabled by the video owner" in t)
+
+def clean_ytdlp_message(message: str) -> str:
+    message = ANSI_ESCAPE_RE.sub("", message or "")
+    return " ".join(message.replace("\r", "\n").split())
+
+def _runtime_name_from_value(value: str | None) -> Optional[str]:
+    if not value:
+        return None
+    lowered = value.strip().lower()
+    if lowered in ("auto", ""):
+        return None
+    if lowered in ("qjs", "quickjs"):
+        return "quickjs"
+    if lowered in ("deno", "node"):
+        return lowered
+    return None
+
+def _runtime_name_from_path(path: str) -> str:
+    name = Path(path).name.lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if name in ("qjs", "quickjs"):
+        return "quickjs"
+    if name in ("node", "deno"):
+        return name
+    return "deno"
+
+@lru_cache(maxsize=32)
+def _find_runtime_executable(runtime: str, search_path: str) -> Optional[str]:
+    for binary in JS_RUNTIME_BINARIES.get(runtime, (runtime,)):
+        found = shutil.which(binary, path=search_path)
+        if found:
+            return found
+    return None
+
+def get_js_runtime_status() -> Dict[str, str]:
+    explicit_path = os.getenv("YTND_JS_RUNTIME_PATH", "").strip()
+    raw_runtime = os.getenv("YTND_JS_RUNTIME", "auto").strip().lower()
+    explicit_runtime = _runtime_name_from_value(raw_runtime)
+    search_path = os.getenv("PATH", "")
+
+    if raw_runtime not in ("", "auto") and explicit_runtime is None:
+        return {"status": "error", "detail": f"Unsupported JavaScript runtime: {raw_runtime}"}
+
+    if explicit_path:
+        runtime = explicit_runtime or _runtime_name_from_path(explicit_path)
+        if runtime not in JS_RUNTIME_ORDER:
+            return {"status": "error", "detail": f"Unsupported JavaScript runtime: {runtime}"}
+        if not Path(explicit_path).is_file():
+            return {
+                "status": "error",
+                "runtime": runtime,
+                "path": explicit_path,
+                "detail": "Configured JavaScript runtime path does not exist",
+            }
+        return {"status": "ok", "runtime": runtime, "path": explicit_path}
+
+    if explicit_runtime:
+        found = _find_runtime_executable(explicit_runtime, search_path)
+        if found:
+            return {"status": "ok", "runtime": explicit_runtime, "path": found}
+        return {
+            "status": "error",
+            "runtime": explicit_runtime,
+            "detail": f"Configured JavaScript runtime '{explicit_runtime}' was not found in PATH",
+        }
+
+    for runtime in JS_RUNTIME_ORDER:
+        found = _find_runtime_executable(runtime, search_path)
+        if found:
+            return {"status": "ok", "runtime": runtime, "path": found}
+
+    return {
+        "status": "error",
+        "runtime": "deno",
+        "detail": "No supported JavaScript runtime found. Install Deno or set YTND_JS_RUNTIME_PATH.",
+    }
+
+def _yt_dlp_js_runtime_options() -> Dict[str, Dict[str, str]]:
+    status = get_js_runtime_status()
+    runtime = status.get("runtime") or "deno"
+    if runtime not in JS_RUNTIME_ORDER:
+        runtime = "deno"
+    path = status.get("path")
+    return {runtime: {"path": path} if path else {}}
+
+def get_cookies_status(cookie_file: Optional[Path] = None) -> Dict[str, str]:
+    cookie_file = cookie_file or COOKIES_FILE
+    if not cookie_file.exists():
+        return {"status": "missing", "detail": f"No cookies file at {cookie_file}"}
+
+    try:
+        size = cookie_file.stat().st_size
+    except OSError as exc:
+        return {"status": "invalid", "detail": f"Cannot read cookies file: {exc}"}
+
+    if size == 0:
+        return {"status": "empty", "detail": "Cookies file is empty"}
+
+    try:
+        lines = cookie_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError as exc:
+        return {"status": "invalid", "detail": f"Cannot read cookies file: {exc}"}
+
+    first_line = lines[0].lstrip("\ufeff").strip() if lines else ""
+    if first_line not in COOKIE_HEADERS:
+        return {
+            "status": "invalid",
+            "detail": "Cookies file must be in Netscape format and start with '# Netscape HTTP Cookie File' or '# HTTP Cookie File'",
+        }
+
+    cookie_rows = [
+        line for line in lines
+        if line.strip() and not line.lstrip().startswith("#") and len(line.split("\t")) >= 7
+    ]
+    if not cookie_rows:
+        return {"status": "invalid", "detail": "Cookies file contains no valid cookie rows"}
+
+    youtube_rows = sum(1 for line in cookie_rows if "youtube.com" in line.split("\t", 1)[0].lower())
+    modified = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(cookie_file.stat().st_mtime))
+    return {
+        "status": "present",
+        "detail": f"{len(cookie_rows)} cookie row(s), {youtube_rows} YouTube row(s), {size} bytes, modified {modified}",
+    }
+
+def _should_use_cookies(cookie_file: Optional[Path] = None) -> bool:
+    cookie_file = cookie_file or COOKIES_FILE
+    return get_cookies_status(cookie_file).get("status") == "present"
+
+class YtDlpCaptureLogger:
+    def __init__(self) -> None:
+        self.debug_messages: List[str] = []
+        self.warning_messages: List[str] = []
+        self.error_messages: List[str] = []
+
+    def debug(self, message: str) -> None:
+        self.debug_messages.append(clean_ytdlp_message(message))
+
+    def warning(self, message: str) -> None:
+        self.warning_messages.append(clean_ytdlp_message(message))
+
+    def error(self, message: str) -> None:
+        self.error_messages.append(clean_ytdlp_message(message))
+
+    def text(self) -> str:
+        messages = self.warning_messages + self.error_messages
+        return clean_ytdlp_message(" ".join(m for m in messages if m))
+
+def apply_yt_dlp_defaults(
+    opts: Dict,
+    *,
+    use_cookies: bool = True,
+    capture_logger: Optional[YtDlpCaptureLogger] = None,
+) -> Dict:
+    ydl_opts = dict(opts)
+    ydl_opts["js_runtimes"] = _yt_dlp_js_runtime_options()
+    ydl_opts["no_color"] = True
+    if capture_logger is not None:
+        ydl_opts["logger"] = capture_logger
+    if use_cookies and _should_use_cookies():
+        ydl_opts["cookiefile"] = str(COOKIES_FILE)
+    else:
+        ydl_opts.pop("cookiefile", None)
+    return ydl_opts
+
+def _is_invalid_cookie_error(text: str) -> bool:
+    t = clean_ytdlp_message(text).lower()
+    return (
+        "cookies are no longer valid" in t
+        or "rotated in the browser" in t
+        or "invalid cookie" in t
+        or "cookie file must be" in t
+        or "http error 400: bad request" in t
+    )
+
+def _is_missing_js_runtime_error(text: str) -> bool:
+    t = clean_ytdlp_message(text).lower()
+    return "no supported javascript runtime" in t or "javascript runtime could be found" in t
+
+def _is_bot_signin_error(text: str) -> bool:
+    t = clean_ytdlp_message(text).lower()
+    return "not a bot" in t or "sign in to confirm" in t
+
+def classify_yt_dlp_error(text: str, *, retried_without_cookies: bool = False) -> str:
+    cleaned = clean_ytdlp_message(text)
+    if _is_missing_js_runtime_error(cleaned):
+        return (
+            "yt-dlp needs a supported JavaScript runtime for YouTube. "
+            "Install Deno or set YTND_JS_RUNTIME_PATH."
+        )
+    if _is_invalid_cookie_error(cleaned):
+        retry_note = " Retried without cookies, but YouTube still rejected the request." if retried_without_cookies else ""
+        return (
+            "YouTube cookies are invalid or rotated. Re-export them from a private/incognito "
+            "YouTube session and close that session after exporting."
+            f"{retry_note}"
+        )
+    if _is_bot_signin_error(cleaned):
+        return (
+            "YouTube rejected this server with a sign-in/bot check. "
+            "Use fresh YouTube cookies exported in Netscape format and make sure Deno is installed."
+        )
+    return cleaned or "yt-dlp failed without a detailed error"
 
 class DownloadError(Exception):
     def __init__(self, entry: "_Entry", message: str, stdout: str = "", stderr: str = "", attempt: int = 1):
@@ -267,7 +479,7 @@ class Downloader:
         is_pl = is_youtube_playlist_url(url)
         eff_url = url if is_pl else strip_playlist_context(url)
 
-        ydl_opts = {
+        base_opts = {
             'ignoreerrors': False,
             'no_warnings': False,
             'force_ipv4': True,
@@ -275,22 +487,43 @@ class Downloader:
             'playlistend': 150 if is_pl else -1,
             'quiet': True,
         }
-        if COOKIES_FILE.exists():
-            ydl_opts['cookiefile'] = str(COOKIES_FILE)
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                data = ydl.extract_info(eff_url, download=False)
-                if not data:
-                    return None, "No metadata received"
+        def extract(use_cookies: bool):
+            capture = YtDlpCaptureLogger()
+            opts = apply_yt_dlp_defaults(base_opts, use_cookies=use_cookies, capture_logger=capture)
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    data = ydl.extract_info(eff_url, download=False)
+                    if not data:
+                        return None, "No metadata received", capture.text()
+                    return data, None, capture.text()
+            except yt_dlp.utils.DownloadError as e:
+                return None, f"yt-dlp error: {e}", capture.text()
+            except Exception as e:
+                return None, f"Metadata fetch error: {e}", capture.text()
+
+        use_cookies = _should_use_cookies()
+        data, err, captured = extract(use_cookies)
+        combined_error = clean_ytdlp_message(f"{captured} {err or ''}")
+
+        if err and use_cookies and _is_invalid_cookie_error(combined_error):
+            self.log.bind(step="metadata", url=eff_url).warning(
+                "Cookie file appears invalid; retrying metadata without cookies"
+            )
+            data, retry_err, retry_captured = extract(False)
+            if not retry_err and data:
                 return data, None
-        except yt_dlp.utils.DownloadError as e:
-            reason = f"yt-dlp error: {e}"
+            combined_error = clean_ytdlp_message(f"{combined_error} {retry_captured} {retry_err or ''}")
+            err = classify_yt_dlp_error(combined_error, retried_without_cookies=True)
+        elif err:
+            err = classify_yt_dlp_error(combined_error)
+
+        if err:
+            reason = f"yt-dlp error: {err}" if not err.startswith("Metadata fetch error:") else err
             self.log.bind(step="metadata", url=eff_url).warning(reason)
             return None, reason
-        except Exception as e:
-            self.log.bind(step="metadata", url=eff_url).error("Metadata fetch error: %s", e)
-            return None, f"Metadata fetch error: {e}"
+
+        return data, None
 
     def _process_entry(self, entry: "_Entry") -> None:
         """
@@ -350,33 +583,49 @@ class Downloader:
             'writethumbnail': True,
             'noprogress': False,
         }
-        if COOKIES_FILE.exists():
-            base_opts['cookiefile'] = str(COOKIES_FILE)
 
-        def do_download(opts):
+        def do_download(opts, *, use_cookies: bool):
+            capture = YtDlpCaptureLogger()
+            ydl_opts = apply_yt_dlp_defaults(opts, use_cookies=use_cookies, capture_logger=capture)
             try:
-                with yt_dlp.YoutubeDL(opts) as ydl:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     res_code = ydl.download([entry.url])
-                    return res_code, None
+                    return res_code, capture.text()
             except yt_dlp.utils.DownloadError as de:
-                return 1, str(de)
+                return 1, clean_ytdlp_message(f"{capture.text()} {de}")
             except Exception as e:
-                return 1, str(e)
+                return 1, clean_ytdlp_message(f"{capture.text()} {e}")
 
-        res_code, err_msg = do_download(base_opts)
+        use_cookies = _should_use_cookies()
+        retried_without_cookies = False
+        res_code, err_msg = do_download(base_opts, use_cookies=use_cookies)
+
+        if res_code != 0 and use_cookies and _is_invalid_cookie_error(err_msg):
+            retried_without_cookies = True
+            self.log.bind(step="download", vid=entry.id).warning(
+                "Cookie file appears invalid; retrying download without cookies"
+            )
+            res_code, retry_err = do_download(base_opts, use_cookies=False)
+            if res_code != 0:
+                err_msg = clean_ytdlp_message(f"{err_msg} {retry_err}")
+            else:
+                err_msg = retry_err
 
         if res_code != 0:
             if _needs_android_client(err_msg):
                 time.sleep(0.8)
                 retry_opts = base_opts.copy()
                 retry_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
-                res_code, err_msg = do_download(retry_opts)
+                retry_use_cookies = use_cookies and not _is_invalid_cookie_error(err_msg)
+                res_code, err_msg = do_download(retry_opts, use_cookies=retry_use_cookies)
                 if res_code != 0:
-                    self._send_progress(entry.url, "error", title=entry.title, artist=entry.uploader, id=entry.id, error=_shorten(err_msg))
-                    raise DownloadError(entry, message=f"yt-dlp exit: {_shorten(err_msg)}", attempt=2, stderr=err_msg)
+                    friendly = classify_yt_dlp_error(err_msg, retried_without_cookies=retried_without_cookies)
+                    self._send_progress(entry.url, "error", title=entry.title, artist=entry.uploader, id=entry.id, error=_shorten(friendly))
+                    raise DownloadError(entry, message=f"yt-dlp exit: {_shorten(friendly)}", attempt=2, stderr=err_msg)
             else:
-                self._send_progress(entry.url, "error", title=entry.title, artist=entry.uploader, id=entry.id, error=_shorten(err_msg))
-                raise DownloadError(entry, message=f"yt-dlp exit: {_shorten(err_msg)}", attempt=1, stderr=err_msg)
+                friendly = classify_yt_dlp_error(err_msg, retried_without_cookies=retried_without_cookies)
+                self._send_progress(entry.url, "error", title=entry.title, artist=entry.uploader, id=entry.id, error=_shorten(friendly))
+                raise DownloadError(entry, message=f"yt-dlp exit: {_shorten(friendly)}", attempt=1, stderr=err_msg)
 
         for dl_file in self.out_dir.glob(f"{uid}_*"):
             if not dl_file.is_file() or dl_file.suffix.lower() not in AUDIO_EXTENSIONS:
@@ -429,7 +678,7 @@ class Downloader:
                  return (self.cover_dir / f"{entry.id}.{ext}").name
 
         out_tpl = self.cover_dir / f"{entry.id}.%(ext)s"
-        ydl_opts = {
+        base_opts = {
             'skip_download': True,
             'writethumbnail': True,
             'outtmpl': str(out_tpl),
@@ -438,14 +687,36 @@ class Downloader:
             'force_ipv4': True,
             'noprogress': True,
         }
-        if COOKIES_FILE.exists():
-            ydl_opts['cookiefile'] = str(COOKIES_FILE)
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([entry.url])
-        except Exception as e:
-            raise RuntimeError(f"yt-dlp(cover) error: {e}")
+        def download_cover(use_cookies: bool):
+            capture = YtDlpCaptureLogger()
+            opts = apply_yt_dlp_defaults(base_opts, use_cookies=use_cookies, capture_logger=capture)
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([entry.url])
+                return None
+            except Exception as e:
+                return clean_ytdlp_message(f"{capture.text()} {e}")
+
+        use_cookies = _should_use_cookies()
+        retried_without_cookies = False
+        cover_error = download_cover(use_cookies)
+        if cover_error and use_cookies and _is_invalid_cookie_error(cover_error):
+            retried_without_cookies = True
+            self.log.bind(step="cover", vid=entry.id).warning(
+                "Cookie file appears invalid; retrying cover download without cookies"
+            )
+            retry_error = download_cover(False)
+            if retry_error:
+                cover_error = clean_ytdlp_message(f"{cover_error} {retry_error}")
+            else:
+                cover_error = None
+
+        if cover_error:
+            raise RuntimeError(
+                "yt-dlp(cover) error: "
+                f"{classify_yt_dlp_error(cover_error, retried_without_cookies=retried_without_cookies)}"
+            )
 
         downloaded_cover = None
         for ext in ("webp", "png", "jpeg", "jpg"):

@@ -33,6 +33,7 @@ YTND Manager is a web-based management interface for downloading and organising 
 - **uv** for Python dependency management.
 - **Node.js and npm** (or yarn/pnpm) for the frontend.
 - **FFmpeg** installed and accessible in your system's `PATH`.
+- **Deno** or another supported JavaScript runtime for YouTube extraction on servers.
 
 ### Installation
 
@@ -77,6 +78,10 @@ YTND Manager is a web-based management interface for downloading and organising 
     # Optional: only set when ffmpeg is not available in PATH
     # FFMPEG_PATH="/usr/bin/ffmpeg"
 
+    # Optional: YouTube JavaScript runtime. Leave unset to auto-detect deno, node, or qjs.
+    # YTND_JS_RUNTIME="auto"
+    # YTND_JS_RUNTIME_PATH="/usr/local/bin/deno"
+
     # Optional: enable WebDAV endpoint
     WEBDAV_ENABLED="false"
 
@@ -96,11 +101,17 @@ YTND Manager is a web-based management interface for downloading and organising 
     | `COVERS_ROOT` | No | `DATA_ROOT / "covers"` | Cover image directory. |
     | `LOG_DIR` | No | `DATA_ROOT / "logs"` | Log file directory. |
     | `DATABASE_FILE` | No | `DATA_ROOT / "ytnd.db"` | SQLite database file path. |
-    | `COOKIES_FILE` | No | `DATA_ROOT / "cookies.txt"` | Path where your Netscape `cookies.txt` should be placed (needed for age-restricted content). |
+    | `COOKIES_FILE` | No | `DATA_ROOT / "cookies.txt"` | Path where your Netscape-format YouTube `cookies.txt` should be placed. |
     | `FFMPEG_PATH` | No | Uses `PATH`/auto-detect | Path to ffmpeg binary if not available globally. |
+    | `YTND_JS_RUNTIME` | No | `auto` | JavaScript runtime name to use for yt-dlp (`auto`, `deno`, `node`, or `quickjs`). |
+    | `YTND_JS_RUNTIME_PATH` | No | Auto-detect | Explicit path to the JavaScript runtime executable. Deno is recommended for servers. |
     | `WEBDAV_ENABLED` | No | `false` | Enables WebDAV endpoints when set to `true`. |
     | `INITIAL_ADMIN_USERNAME` | No | – | Creates the initial admin user on startup (with password). |
     | `INITIAL_ADMIN_PASSWORD` | No | – | Password for `INITIAL_ADMIN_USERNAME`. |
+
+    YouTube cookies must be exported in Mozilla/Netscape `cookies.txt` format. For the most reliable export, open a private/incognito browser window, log into YouTube, navigate that same tab to `https://www.youtube.com/robots.txt`, export the `youtube.com` cookies, then close the private window so the exported session is not rotated by the browser.
+
+    On Pelican installs, update/reinstall the egg after upgrading so `/home/container/bin/deno` is installed and `YTND_JS_RUNTIME_PATH` is set automatically.
 
 3.  **Install backend dependencies:**
     Use uv to install Python dependencies.
