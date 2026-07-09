@@ -10,7 +10,7 @@ from urllib.parse import urlparse, quote, unquote
 from html import escape
 from typing import Optional, List, Dict, Tuple, Any
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query, Body, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query, Body, Form, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
@@ -22,6 +22,7 @@ from .config import (
     OUTPUT_ROOT,
     COVERS_ROOT,
     LOG_DIR,
+    COOKIES_FILE,
     MANAGER_HOST,
     MANAGER_PORT,
     MANAGER_SECRET,
@@ -391,6 +392,42 @@ def api_get_csrf_token(current: dict = Depends(require_session)):
     if not csrf_token:
         csrf_token = _generate_csrf_token(current["uid"])
     return {"csrfToken": csrf_token}
+
+@app.post("/api/cookies")
+async def api_upload_cookies(
+    csrf_token: str = Form(""),
+    file: UploadFile = File(...),
+    current: dict = Depends(require_session),
+):
+    """Upload and replace the server cookies.txt file (Admin only)."""
+    if current["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    if not _verify_csrf_token(current["uid"], csrf_token):
+        raise HTTPException(status_code=403, detail="CSRF token invalid")
+
+    target = COOKIES_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+
+    try:
+        temp_path.write_bytes(await file.read())
+        status = get_cookies_status(temp_path)
+        if status.get("status") != "present":
+            raise HTTPException(
+                status_code=400,
+                detail=status.get("detail", "Invalid cookies file"),
+            )
+
+        os.replace(temp_path, target)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save cookies file: {exc}") from exc
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+    return {"cookiesStatus": get_cookies_status(target)}
 
 LOG_TEXT_RE = re.compile(
     r'^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4})'

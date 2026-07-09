@@ -40,7 +40,7 @@ export interface LogEntry {
   ts: string;
   lvl: 'INFO' | 'WARNING' | 'ERROR' | 'DEBUG';
   msg: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export interface ApiResponse<T> {
@@ -197,6 +197,34 @@ export async function updatePassword(currentPassword: string, newPassword: strin
     const error = await res.json();
     throw new Error(error.detail || 'Failed to update password');
   }
+}
+
+// Admin
+export async function uploadCookiesFile(file: File, csrfToken: string): Promise<SystemStatus> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('csrf_token', csrfToken);
+
+  const res = await fetch(`${API_BASE}/api/cookies`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData,
+  });
+
+  if (!res.ok) {
+    let detail = 'Failed to upload cookies file';
+    try {
+      const error = await res.json();
+      if (error?.detail) detail = error.detail;
+    } catch {
+      const text = await res.text().catch(() => '');
+      if (text) detail = text;
+    }
+    throw new Error(detail);
+  }
+
+  const data = await res.json();
+  return data.cookiesStatus;
 }
 
 // Users

@@ -1,8 +1,11 @@
-import type { ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useRef, type ChangeEvent, type ReactNode } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import { Music, Download, Users, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Music, Download, Users, CheckCircle, XCircle, AlertCircle, Upload } from 'lucide-react';
+import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { useToast } from './ui/toast';
+import { useCsrfToken } from '../hooks/useCsrfToken';
 import * as api from '../lib/api';
 
 function getStatusIcon(status: string) {
@@ -44,10 +47,49 @@ function StatusCard({ status, label, children, trailing, iconGap = 'gap-2' }: St
 }
 
 function DashboardView() {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+  const { token: csrfToken } = useCsrfToken();
+
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard'],
     queryFn: api.getDashboardData,
   });
+
+  const uploadCookiesMutation = useMutation({
+    mutationFn: (file: File) => {
+      if (!csrfToken) {
+        throw new Error('CSRF token is not ready');
+      }
+      return api.uploadCookiesFile(file, csrfToken);
+    },
+    onSuccess: (cookiesStatus) => {
+      queryClient.setQueryData<api.DashboardData>(['dashboard'], (current) => {
+        if (!current?.adminData) return current;
+        return {
+          ...current,
+          adminData: {
+            ...current.adminData,
+            cookiesStatus,
+          },
+        };
+      });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      showToast('Cookies file uploaded successfully.', 'success');
+    },
+    onError: (error: Error) => {
+      showToast(error.message, 'error');
+    },
+  });
+
+  const handleCookiesFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    uploadCookiesMutation.mutate(file);
+    event.target.value = '';
+  };
 
   if (isLoading) {
     return <div className="text-center py-8">Loading dashboard...</div>;
@@ -102,7 +144,7 @@ function DashboardView() {
                 >
                   {song.cover_available ? (
                     <img 
-                      src={api.getCoverUrl(data.userId, song as any) || ''} 
+                      src={api.getCoverUrl(data.userId, song) || ''}
                       alt={song.title}
                       className="w-12 h-12 object-cover rounded flex-shrink-0"
                     />
@@ -182,9 +224,30 @@ function DashboardView() {
                   label="Cookies File"
                   iconGap="gap-3"
                   trailing={
-                    <span className="text-xs sm:text-sm text-muted-foreground">
-                      {data.adminData.cookiesStatus.status}
-                    </span>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="text-xs sm:text-sm text-muted-foreground">
+                        {data.adminData.cookiesStatus.status}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="min-w-24"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploadCookiesMutation.isPending || !csrfToken}
+                      >
+                        <Upload className="h-4 w-4" />
+                        {uploadCookiesMutation.isPending ? 'Uploading...' : 'Upload'}
+                      </Button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".txt,text/plain"
+                        className="hidden"
+                        aria-label="Upload cookies.txt"
+                        onChange={handleCookiesFileChange}
+                      />
+                    </div>
                   }
                 >
                   {data.adminData.cookiesStatus.detail && (
