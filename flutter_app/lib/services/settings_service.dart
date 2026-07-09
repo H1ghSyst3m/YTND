@@ -12,6 +12,7 @@ class SettingsService {
   static const _syncIntervalHoursKey = 'sync_interval_hours';
   static const _syncWifiOnlyKey = 'sync_wifi_only';
   static const _storagePathKey = 'storage_path';
+  static const _pendingShareUrlsKey = 'pending_share_urls';
 
   static const _secureStorage = FlutterSecureStorage();
 
@@ -39,6 +40,24 @@ class SettingsService {
     await prefs.setString(_storagePathKey, settings.storagePath);
     await _secureStorage.write(key: _passwordKey, value: settings.password);
     await _secureStorage.write(key: _sessionCookieKey, value: settings.sessionCookie);
+  }
+
+  Future<List<String>> loadPendingShareUrls() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_pendingShareUrlsKey) ?? const <String>[];
+  }
+
+  Future<void> savePendingShareUrls(List<String> urls) async {
+    final prefs = await SharedPreferences.getInstance();
+    final unique = <String>[];
+    final seen = <String>{};
+    for (final url in urls) {
+      final value = url.trim();
+      if (value.isNotEmpty && seen.add(value)) {
+        unique.add(value);
+      }
+    }
+    await prefs.setStringList(_pendingShareUrlsKey, unique);
   }
 
   Future<void> clearSession() async {

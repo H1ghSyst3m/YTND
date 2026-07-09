@@ -16,6 +16,18 @@ import '../services/share_intent_service.dart';
 import '../services/sync_service.dart';
 import '../services/websocket_service.dart';
 
+enum ConnectionStatus {
+  setupRequired,
+  signedOut,
+  checking,
+  connected,
+  unreachable,
+  unauthorized,
+  invalidCredentials,
+}
+
+enum QueueAddResult { added, deferred, failed }
+
 class AppState extends ChangeNotifier {
   AppState({
     required SettingsService settingsService,
@@ -23,122 +35,250 @@ class AppState extends ChangeNotifier {
     required SyncService syncService,
     required BackgroundSyncService backgroundSyncService,
     required WebsocketService websocketService,
-  })  : _settingsService = settingsService,
-        _apiService = apiService,
-        _syncService = syncService,
-        _backgroundSyncService = backgroundSyncService,
-        _websocketService = websocketService;
+    required ShareIntentService shareIntentService,
+  }) : this._(
+         settingsService: settingsService,
+         apiService: apiService,
+         syncService: syncService,
+         backgroundSyncService: backgroundSyncService,
+         websocketService: websocketService,
+         shareIntentService: shareIntentService,
+       );
+
+  AppState._({
+    required this._settingsService,
+    required this._apiService,
+    required this._syncService,
+    required this._backgroundSyncService,
+    required this._websocketService,
+    required this._shareIntentService,
+  });
 
   final SettingsService _settingsService;
   final ApiService _apiService;
   final SyncService _syncService;
   final BackgroundSyncService _backgroundSyncService;
   final WebsocketService _websocketService;
+  final ShareIntentService _shareIntentService;
 
   AppSettings _settings = const AppSettings();
   List<Song> _songs = const [];
   List<DownloadQueueItem> _downloadQueue = const [];
+  List<String> _pendingShareUrls = const [];
   StreamSubscription<WsEvent>? _wsSubscription;
-  String? _pendingShareUrl;
+  StreamSubscription<List<String>>? _shareSubscription;
 
   bool _initialized = false;
   bool _isAuthenticated = false;
+  bool _isAuthenticating = false;
+  bool _isSavingSettings = false;
   bool _isSyncing = false;
   bool _isQueueProcessing = false;
+  bool _isLibraryLoading = false;
+  bool _isQueueLoading = false;
+  bool _isAddingToQueue = false;
+  bool _disposed = false;
+  ConnectionStatus _connectionStatus = ConnectionStatus.setupRequired;
   String _statusMessage = '';
+  String? _lastErrorMessage;
+  int _queueFocusVersion = 0;
 
   AppSettings get settings => _settings;
   List<Song> get songs => _songs;
   List<DownloadQueueItem> get downloadQueue => _downloadQueue;
+  List<String> get pendingShareUrls => _pendingShareUrls;
   bool get initialized => _initialized;
   bool get isAuthenticated => _isAuthenticated;
+  bool get isAuthenticating => _isAuthenticating;
+  bool get isSavingSettings => _isSavingSettings;
   bool get isSyncing => _isSyncing;
   bool get isQueueProcessing => _isQueueProcessing;
+  bool get isLibraryLoading => _isLibraryLoading;
+  bool get isQueueLoading => _isQueueLoading;
+  bool get isAddingToQueue => _isAddingToQueue;
+  ConnectionStatus get connectionStatus => _connectionStatus;
   String get statusMessage => _statusMessage;
-  String? get pendingShareUrl => _pendingShareUrl;
+  String? get lastErrorMessage => _lastErrorMessage;
+  int get pendingShareCount => _pendingShareUrls.length;
+  int get queueFocusVersion => _queueFocusVersion;
+  bool get hasServerProfile => _settings.serverUrl.trim().isNotEmpty;
+  bool get hasSavedSession =>
+      _settings.userId.isNotEmpty && _settings.sessionCookie.isNotEmpty;
+
+  String? get pendingShareUrl =>
+      _pendingShareUrls.isEmpty ? null : _pendingShareUrls.first;
+
+  String get connectionTitle {
+    switch (_connectionStatus) {
+      case ConnectionStatus.setupRequired:
+        return 'Server setup required';
+      case ConnectionStatus.signedOut:
+        return 'Signed out';
+      case ConnectionStatus.checking:
+        return 'Connecting';
+      case ConnectionStatus.connected:
+        return 'Connected';
+      case ConnectionStatus.unreachable:
+        return 'Server unreachable';
+      case ConnectionStatus.unauthorized:
+        return 'Session expired';
+      case ConnectionStatus.invalidCredentials:
+        return 'Invalid credentials';
+    }
+  }
+
+  String get connectionMessage {
+    switch (_connectionStatus) {
+      case ConnectionStatus.setupRequired:
+        return 'Add your YTND server and sign in from Settings.';
+      case ConnectionStatus.signedOut:
+        return 'Sign in to sync your library and queue.';
+      case ConnectionStatus.checking:
+        return 'Checking your YTND server...';
+      case ConnectionStatus.connected:
+        return _settings.serverUrl.isEmpty ? 'Ready' : _settings.serverUrl;
+      case ConnectionStatus.unreachable:
+        return _lastErrorMessage ??
+            'The server could not be reached. You can edit it in Settings.';
+      case ConnectionStatus.unauthorized:
+        return 'Sign in again or update the server details in Settings.';
+      case ConnectionStatus.invalidCredentials:
+        return 'Check your username and password, then try again.';
+    }
+  }
 
   String? consumePendingShareUrl() {
-    final value = _pendingShareUrl;
-    _pendingShareUrl = null;
+    if (_pendingShareUrls.isEmpty) {
+      return null;
+    }
+    final value = _pendingShareUrls.first;
+    _pendingShareUrls = _pendingShareUrls.skip(1).toList(growable: false);
+    unawaited(_settingsService.savePendingShareUrls(_pendingShareUrls));
+    notifyListeners();
     return value;
   }
 
   Future<void> initialize() async {
-    _settings = await _settingsService.load();
+    try {
+      _settings = await _settingsService.load();
+      _pendingShareUrls = await _settingsService.loadPendingShareUrls();
 
-    if (_settings.storagePath == AppSettings.defaultStoragePath) {
-      await _ensureDefaultStoragePathExists();
-    }
-
-    if (_settings.serverUrl.isNotEmpty &&
-        _settings.sessionCookie.isNotEmpty &&
-        _settings.userId.isNotEmpty) {
-      try {
-        final authorized = await _apiService.ping(
-          serverUrl: _settings.serverUrl,
-          cookieHeader: _settings.sessionCookie,
-        );
-        _isAuthenticated = authorized;
-      } catch (_) {
-        _isAuthenticated = false;
+      if (_settings.storagePath == AppSettings.defaultStoragePath) {
+        await _ensureDefaultStoragePathExists();
       }
-    }
 
-    if (_isAuthenticated) {
-      _pendingShareUrl = await ShareIntentService().getInitialSharedText();
-      try {
-        await refreshSongs();
-        await refreshQueue();
-      } catch (e) {
-        _statusMessage = 'Failed to load songs: $e';
+      _listenForSharedUrls();
+      final initialUrls = await _shareIntentService.getInitialSharedUrls();
+      if (initialUrls.isNotEmpty) {
+        await _receiveSharedUrls(initialUrls);
       }
-      await _configureBackgroundSync();
-      await _connectWebsocket();
-    }
 
-    _initialized = true;
-    notifyListeners();
+      await _restoreSession();
+    } catch (e, st) {
+      debugPrint('App initialization failed: $e\n$st');
+      _lastErrorMessage = _messageFor(e, 'YTND could not finish startup.');
+      _statusMessage = _lastErrorMessage!;
+      _connectionStatus = hasServerProfile
+          ? ConnectionStatus.unreachable
+          : ConnectionStatus.setupRequired;
+    } finally {
+      _initialized = true;
+      notifyListeners();
+    }
   }
 
-  Future<void> login({
+  Future<bool> login({
     required String serverUrl,
     required String username,
     required String password,
   }) async {
-    final (userId, cookieHeader) = await _apiService.login(
-      serverUrl: serverUrl,
-      username: username,
-      password: password,
-    );
+    if (_isAuthenticating) {
+      return false;
+    }
 
-    _settings = _settings.copyWith(
-      serverUrl: serverUrl,
-      username: username,
-      password: password,
-      userId: userId,
-      sessionCookie: cookieHeader,
-    );
-    await _settingsService.save(_settings);
+    _isAuthenticating = true;
+    _connectionStatus = ConnectionStatus.checking;
+    _lastErrorMessage = null;
+    _statusMessage = 'Signing in...';
+    notifyListeners();
 
-    _isAuthenticated = true;
-    _statusMessage = 'Login successful';
     try {
-      await refreshSongs();
-      await refreshQueue();
+      final normalizedServerUrl = normalizeServerUrl(serverUrl);
+      final normalizedUsername = username.trim();
+      final accountChanged =
+          normalizedServerUrl != _settings.serverUrl ||
+          normalizedUsername != _settings.username ||
+          password != _settings.password;
+
+      if (accountChanged) {
+        _isAuthenticated = false;
+        _songs = const [];
+        _downloadQueue = const [];
+        _isQueueProcessing = false;
+        await _disconnectWebsocket();
+        await _backgroundSyncService.cancel();
+        await _settingsService.clearSession();
+      }
+
+      _settings = _settings.copyWith(
+        serverUrl: normalizedServerUrl,
+        username: normalizedUsername,
+        password: password,
+        userId: accountChanged ? '' : _settings.userId,
+        sessionCookie: accountChanged ? '' : _settings.sessionCookie,
+      );
+      await _settingsService.save(_settings);
+
+      final (userId, cookieHeader) = await _apiService.login(
+        serverUrl: normalizedServerUrl,
+        username: normalizedUsername,
+        password: password,
+      );
+
+      _settings = _settings.copyWith(
+        serverUrl: normalizedServerUrl,
+        username: normalizedUsername,
+        password: password,
+        userId: userId,
+        sessionCookie: cookieHeader,
+      );
+      await _settingsService.save(_settings);
+
+      _isAuthenticated = true;
+      _connectionStatus = ConnectionStatus.connected;
+      _statusMessage = 'Connected to YTND';
+      await _loadInitialData();
       await _configureBackgroundSync();
       await _connectWebsocket();
+      await retryPendingShareUrls();
+      return true;
     } catch (e, st) {
-      debugPrint('Post-login refresh failed: $e\n$st');
+      debugPrint('Login failed: $e\n$st');
+      _isAuthenticated = false;
+      _connectionStatus = _statusForError(
+        e,
+        authFailureIsInvalidCredentials: true,
+      );
+      _lastErrorMessage = _messageFor(e, 'Could not sign in.');
+      _statusMessage = _lastErrorMessage!;
+      notifyListeners();
+      rethrow;
+    } finally {
+      _isAuthenticating = false;
+      notifyListeners();
     }
-    notifyListeners();
   }
 
   Future<void> logout() async {
     _isAuthenticated = false;
     _songs = const [];
     _downloadQueue = const [];
-    _statusMessage = 'Logged out';
+    _statusMessage = 'Signed out';
+    _lastErrorMessage = null;
     _isQueueProcessing = false;
+    _connectionStatus = hasServerProfile
+        ? ConnectionStatus.signedOut
+        : ConnectionStatus.setupRequired;
     _settings = _settings.copyWith(userId: '', sessionCookie: '');
     await _settingsService.save(_settings);
     await _settingsService.clearSession();
@@ -147,15 +287,76 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> saveSettings(AppSettings newSettings) async {
-    _settings = newSettings;
-    await _settingsService.save(_settings);
-    await _configureBackgroundSync();
-    if (_isAuthenticated) {
-      await _connectWebsocket();
-      await refreshQueue();
+  Future<bool> saveSettings(AppSettings newSettings) async {
+    if (_isSavingSettings) {
+      return false;
     }
+
+    _isSavingSettings = true;
+    _lastErrorMessage = null;
     notifyListeners();
+
+    try {
+      final normalizedServerUrl = newSettings.serverUrl.trim().isEmpty
+          ? ''
+          : normalizeServerUrl(newSettings.serverUrl);
+      var next = newSettings.copyWith(serverUrl: normalizedServerUrl);
+      final accountChanged =
+          normalizedServerUrl != _settings.serverUrl ||
+          next.username != _settings.username ||
+          next.password != _settings.password;
+
+      if (accountChanged) {
+        next = next.copyWith(userId: '', sessionCookie: '');
+        _isAuthenticated = false;
+        _songs = const [];
+        _downloadQueue = const [];
+        _isQueueProcessing = false;
+        await _disconnectWebsocket();
+        await _backgroundSyncService.cancel();
+        await _settingsService.clearSession();
+      }
+
+      _settings = next;
+      await _settingsService.save(_settings);
+      if (_isAuthenticated) {
+        await _configureBackgroundSync();
+        await _connectWebsocket();
+      }
+      _connectionStatus = _statusAfterLocalSave(accountChanged);
+      _statusMessage = accountChanged
+          ? 'Server settings saved. Sign in to connect.'
+          : 'Settings saved';
+      notifyListeners();
+      return true;
+    } catch (e, st) {
+      debugPrint('Saving settings failed: $e\n$st');
+      _lastErrorMessage = _messageFor(e, 'Could not save settings.');
+      _statusMessage = _lastErrorMessage!;
+      notifyListeners();
+      rethrow;
+    } finally {
+      _isSavingSettings = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> retryConnection() async {
+    if (!hasServerProfile) {
+      _connectionStatus = ConnectionStatus.setupRequired;
+      _statusMessage = 'Add your server details in Settings.';
+      notifyListeners();
+      return false;
+    }
+    if (!hasSavedSession) {
+      _connectionStatus = ConnectionStatus.signedOut;
+      _statusMessage = 'Sign in to connect.';
+      notifyListeners();
+      return false;
+    }
+    await _restoreSession();
+    notifyListeners();
+    return _connectionStatus == ConnectionStatus.connected;
   }
 
   String? coverUrlFor(Song song) {
@@ -171,63 +372,102 @@ class AppState extends ChangeNotifier {
         .toString();
   }
 
-  Future<void> refreshSongs() async {
+  Future<bool> refreshSongs() async {
     if (!_isAuthenticated) {
-      return;
-    }
-
-    _songs = await _apiService.fetchSongs(
-      serverUrl: _settings.serverUrl,
-      userId: _settings.userId,
-      cookieHeader: _settings.sessionCookie,
-    );
-    notifyListeners();
-  }
-
-  Future<void> refreshQueue() async {
-    if (!_isAuthenticated) {
-      return;
-    }
-    final urls = await _apiService.fetchQueue(
-      serverUrl: _settings.serverUrl,
-      userId: _settings.userId,
-      cookieHeader: _settings.sessionCookie,
-    );
-    final serverUrlSet = urls.toSet();
-    final inFlight = _downloadQueue
-        .where((item) =>
-            (item.status == DownloadStatus.downloading || item.status == DownloadStatus.processing) &&
-            !serverUrlSet.contains(item.url))
-        .toList();
-    final currentByUrl = {for (final item in _downloadQueue) item.url: item};
-    _downloadQueue = [
-      ...inFlight,
-      ...urls.map((url) => currentByUrl[url] ?? DownloadQueueItem(url: url)),
-    ];
-    notifyListeners();
-  }
-
-  Future<void> syncNow() async {
-    if (_isSyncing || !_isAuthenticated) {
-      return;
-    }
-
-    final connected = await _hasNetwork();
-    if (!connected) {
-      _statusMessage = 'Skipped sync: no network access';
+      _statusMessage = 'Sign in to load your library.';
       notifyListeners();
-      return;
+      return false;
+    }
+
+    _isLibraryLoading = true;
+    _lastErrorMessage = null;
+    notifyListeners();
+
+    try {
+      _songs = await _apiService.fetchSongs(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+      );
+      _connectionStatus = ConnectionStatus.connected;
+      _statusMessage = 'Library updated';
+      return true;
+    } catch (e, st) {
+      debugPrint('Refresh songs failed: $e\n$st');
+      await _handleOperationFailure(e, 'Could not refresh the library.');
+      return false;
+    } finally {
+      _isLibraryLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> refreshQueue() async {
+    if (!_isAuthenticated) {
+      _statusMessage = 'Sign in to load the queue.';
+      notifyListeners();
+      return false;
+    }
+
+    _isQueueLoading = true;
+    _lastErrorMessage = null;
+    notifyListeners();
+
+    try {
+      final urls = await _apiService.fetchQueue(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+      );
+      final serverUrlSet = urls.toSet();
+      final inFlight = _downloadQueue
+          .where(
+            (item) =>
+                (item.status == DownloadStatus.downloading ||
+                    item.status == DownloadStatus.processing) &&
+                !serverUrlSet.contains(item.url),
+          )
+          .toList();
+      final currentByUrl = {for (final item in _downloadQueue) item.url: item};
+      _downloadQueue = [
+        ...inFlight,
+        ...urls.map((url) => currentByUrl[url] ?? DownloadQueueItem(url: url)),
+      ];
+      _connectionStatus = ConnectionStatus.connected;
+      return true;
+    } catch (e, st) {
+      debugPrint('Refresh queue failed: $e\n$st');
+      await _handleOperationFailure(e, 'Could not refresh the queue.');
+      return false;
+    } finally {
+      _isQueueLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> syncNow() async {
+    if (_isSyncing || !_isAuthenticated) {
+      return false;
     }
 
     _isSyncing = true;
     _statusMessage = 'Sync in progress...';
+    _lastErrorMessage = null;
     notifyListeners();
 
     try {
+      final connected = await _hasNetwork();
+      if (!connected) {
+        _statusMessage = 'Sync skipped: no network access.';
+        _connectionStatus = ConnectionStatus.unreachable;
+        notifyListeners();
+        return false;
+      }
+
       final permissionGranted = await _requestStoragePermissions();
       if (!permissionGranted) {
-        _statusMessage = 'Sync skipped: storage permission denied';
-        return;
+        _statusMessage = 'Sync skipped: storage permission denied.';
+        return false;
       }
       final result = await _syncService.sync(
         serverUrl: _settings.serverUrl,
@@ -236,91 +476,417 @@ class AppState extends ChangeNotifier {
         storagePath: _settings.storagePath,
       );
       await refreshSongs();
+      _connectionStatus = ConnectionStatus.connected;
       _statusMessage =
-          'Sync finished: ${result.remoteCount} server songs, ${result.downloaded} downloaded, ${result.deleted} removed locally';
-    } catch (e) {
-      _statusMessage = 'Sync failed: $e';
+          'Sync finished: ${result.remoteCount} server songs, ${result.downloaded} downloaded, ${result.deleted} removed locally.';
+      return true;
+    } catch (e, st) {
+      debugPrint('Sync failed: $e\n$st');
+      await _handleOperationFailure(e, 'Sync failed.');
+      return false;
     } finally {
       _isSyncing = false;
       notifyListeners();
     }
   }
 
-  Future<void> deleteSong(Song song) async {
+  Future<bool> deleteSong(Song song) async {
     if (!_isAuthenticated) {
-      return;
+      return false;
     }
 
-    await _syncService.deleteSongOnServerAndLocal(
-      serverUrl: _settings.serverUrl,
-      userId: _settings.userId,
-      cookieHeader: _settings.sessionCookie,
-      storagePath: _settings.storagePath,
-      song: song,
-    );
+    try {
+      await _syncService.deleteSongOnServerAndLocal(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+        storagePath: _settings.storagePath,
+        song: song,
+      );
 
-    await refreshSongs();
-    _statusMessage = 'Deleted "${song.title}"';
+      await refreshSongs();
+      _statusMessage = 'Deleted "${song.title}"';
+      notifyListeners();
+      return true;
+    } catch (e, st) {
+      debugPrint('Delete failed: $e\n$st');
+      await _handleOperationFailure(e, 'Could not delete this song.');
+      return false;
+    }
+  }
+
+  Future<bool> redownloadSong(Song song, {bool force = false}) async {
+    if (!_isAuthenticated) {
+      return false;
+    }
+
+    try {
+      await _apiService.redownloadSong(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        song: song,
+        cookieHeader: _settings.sessionCookie,
+        force: force,
+      );
+      _statusMessage = 'Queued "${song.title}" for redownload';
+      _queueFocusVersion++;
+      await refreshQueue();
+      notifyListeners();
+      return true;
+    } catch (e, st) {
+      debugPrint('Redownload failed: $e\n$st');
+      await _handleOperationFailure(
+        e,
+        'Could not queue this song for redownload.',
+      );
+      return false;
+    }
+  }
+
+  Future<QueueAddResult> addUrlsToQueue(
+    List<String> urls, {
+    bool fromShare = false,
+  }) async {
+    final normalized = _uniqueUrls(urls);
+    if (normalized.isEmpty) {
+      _statusMessage = 'No valid YouTube links found.';
+      notifyListeners();
+      return QueueAddResult.failed;
+    }
+
+    if (!_isAuthenticated) {
+      await _storePendingShareUrls(normalized);
+      _statusMessage = 'Saved ${normalized.length} link(s) until you sign in.';
+      _queueFocusVersion++;
+      notifyListeners();
+      return QueueAddResult.deferred;
+    }
+
+    _isAddingToQueue = true;
+    _lastErrorMessage = null;
     notifyListeners();
-  }
 
-  Future<void> addUrlsToQueue(List<String> urls) async {
-    final normalized = urls.map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    if (!_isAuthenticated || normalized.isEmpty) {
-      return;
+    try {
+      await _apiService.addToQueue(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+        urls: normalized,
+      );
+      _statusMessage = 'Added ${normalized.length} link(s) to the queue';
+      _queueFocusVersion++;
+      await refreshQueue();
+      return QueueAddResult.added;
+    } catch (e, st) {
+      debugPrint('Add queue failed: $e\n$st');
+      if (fromShare) {
+        await _storePendingShareUrls(normalized);
+      }
+      await _handleOperationFailure(e, 'Could not add the link to the queue.');
+      return QueueAddResult.failed;
+    } finally {
+      _isAddingToQueue = false;
+      notifyListeners();
     }
-
-    await _apiService.addToQueue(
-      serverUrl: _settings.serverUrl,
-      userId: _settings.userId,
-      cookieHeader: _settings.sessionCookie,
-      urls: normalized,
-    );
-    _statusMessage = 'Added ${normalized.length} URL(s) to queue';
-    await refreshQueue();
   }
 
-  Future<void> removeUrlFromQueue(String url) async {
+  Future<bool> retryPendingShareUrls() async {
+    if (_pendingShareUrls.isEmpty) {
+      return true;
+    }
     if (!_isAuthenticated) {
-      return;
+      _statusMessage =
+          'Sign in to add ${_pendingShareUrls.length} pending link(s).';
+      notifyListeners();
+      return false;
     }
-    await _apiService.removeFromQueue(
-      serverUrl: _settings.serverUrl,
-      userId: _settings.userId,
-      cookieHeader: _settings.sessionCookie,
-      urls: [url],
-    );
-    await refreshQueue();
+
+    final urls = List<String>.of(_pendingShareUrls);
+    _isAddingToQueue = true;
+    notifyListeners();
+
+    try {
+      await _apiService.addToQueue(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+        urls: urls,
+      );
+      _pendingShareUrls = const [];
+      await _settingsService.savePendingShareUrls(_pendingShareUrls);
+      _statusMessage = 'Added ${urls.length} pending link(s) to the queue';
+      _queueFocusVersion++;
+      await refreshQueue();
+      return true;
+    } catch (e, st) {
+      debugPrint('Retry pending shares failed: $e\n$st');
+      await _handleOperationFailure(e, 'Could not add pending links yet.');
+      return false;
+    } finally {
+      _isAddingToQueue = false;
+      notifyListeners();
+    }
   }
 
-  Future<void> clearQueue() async {
+  Future<bool> removeUrlFromQueue(String url) async {
     if (!_isAuthenticated) {
-      return;
+      return false;
     }
-    await _apiService.removeFromQueue(
-      serverUrl: _settings.serverUrl,
-      userId: _settings.userId,
-      cookieHeader: _settings.sessionCookie,
-    );
-    await refreshQueue();
+    try {
+      await _apiService.removeFromQueue(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+        urls: [url],
+      );
+      _statusMessage = 'Removed link from the queue';
+      await refreshQueue();
+      return true;
+    } catch (e, st) {
+      debugPrint('Remove queue item failed: $e\n$st');
+      await _handleOperationFailure(e, 'Could not remove that link.');
+      return false;
+    }
   }
 
-  Future<void> processQueue() async {
+  Future<bool> clearQueue() async {
+    if (!_isAuthenticated) {
+      return false;
+    }
+    try {
+      await _apiService.removeFromQueue(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+      );
+      _statusMessage = 'Queue cleared';
+      await refreshQueue();
+      return true;
+    } catch (e, st) {
+      debugPrint('Clear queue failed: $e\n$st');
+      await _handleOperationFailure(e, 'Could not clear the queue.');
+      return false;
+    }
+  }
+
+  Future<bool> processQueue() async {
     if (!_isAuthenticated || _isQueueProcessing || _downloadQueue.isEmpty) {
+      return false;
+    }
+    try {
+      final queued = await _apiService.processQueue(
+        serverUrl: _settings.serverUrl,
+        userId: _settings.userId,
+        cookieHeader: _settings.sessionCookie,
+      );
+      if (queued > 0) {
+        _isQueueProcessing = true;
+        _statusMessage = 'Started processing $queued item(s)';
+      } else {
+        _statusMessage = 'No items to process';
+      }
+      notifyListeners();
+      return queued > 0;
+    } catch (e, st) {
+      debugPrint('Process queue failed: $e\n$st');
+      await _handleOperationFailure(e, 'Could not start the queue.');
+      return false;
+    }
+  }
+
+  void dismissError() {
+    _lastErrorMessage = null;
+    notifyListeners();
+  }
+
+  Future<void> _restoreSession() async {
+    if (!hasServerProfile) {
+      _isAuthenticated = false;
+      _connectionStatus = ConnectionStatus.setupRequired;
+      _statusMessage = 'Add your server details in Settings.';
       return;
     }
-    final queued = await _apiService.processQueue(
-      serverUrl: _settings.serverUrl,
-      userId: _settings.userId,
-      cookieHeader: _settings.sessionCookie,
+    if (!hasSavedSession) {
+      _isAuthenticated = false;
+      _connectionStatus = ConnectionStatus.signedOut;
+      _statusMessage = 'Sign in to connect.';
+      return;
+    }
+
+    _isAuthenticated = true;
+    _connectionStatus = ConnectionStatus.checking;
+    _statusMessage = 'Checking saved session...';
+    notifyListeners();
+
+    try {
+      final authorized = await _apiService.ping(
+        serverUrl: _settings.serverUrl,
+        cookieHeader: _settings.sessionCookie,
+      );
+      if (!authorized) {
+        await _expireSession('Your session expired. Sign in again.');
+        return;
+      }
+      _isAuthenticated = true;
+      _connectionStatus = ConnectionStatus.connected;
+      _statusMessage = 'Connected to YTND';
+      await _loadInitialData();
+      await _configureBackgroundSync();
+      await _connectWebsocket();
+      await retryPendingShareUrls();
+    } catch (e, st) {
+      debugPrint('Session restore failed: $e\n$st');
+      if (e is ApiException && e.isAuthFailure) {
+        await _expireSession(
+          _messageFor(e, 'Your session expired. Sign in again.'),
+        );
+        return;
+      }
+      _isAuthenticated = hasSavedSession;
+      _connectionStatus = _statusForError(e);
+      _lastErrorMessage = _messageFor(e, 'Could not reach your YTND server.');
+      _statusMessage = _lastErrorMessage!;
+      await _backgroundSyncService.cancel();
+    }
+  }
+
+  Future<void> _loadInitialData() async {
+    await refreshSongs();
+    await refreshQueue();
+  }
+
+  Future<void> _receiveSharedUrls(List<String> urls) async {
+    if (_disposed) {
+      return;
+    }
+    final normalized = _uniqueUrls(urls);
+    if (normalized.isEmpty) {
+      return;
+    }
+    _queueFocusVersion++;
+    await addUrlsToQueue(normalized, fromShare: true);
+  }
+
+  void _listenForSharedUrls() {
+    _shareSubscription ??= _shareIntentService.sharedUrlStream.listen(
+      (urls) => unawaited(_receiveSharedUrls(urls)),
+      onError: (Object e, StackTrace st) {
+        debugPrint('Share intent stream failed: $e\n$st');
+      },
     );
-    if (queued > 0) {
-      _isQueueProcessing = true;
-      _statusMessage = 'Started processing $queued item(s)';
-    } else {
-      _statusMessage = 'No items to process';
+  }
+
+  Future<void> _storePendingShareUrls(List<String> urls) async {
+    final combined = _uniqueUrls([..._pendingShareUrls, ...urls]);
+    _pendingShareUrls = combined;
+    await _settingsService.savePendingShareUrls(_pendingShareUrls);
+  }
+
+  List<String> _uniqueUrls(Iterable<String> urls) {
+    final result = <String>[];
+    final seen = <String>{};
+    for (final url in urls) {
+      final value = url.trim();
+      if (value.isNotEmpty && seen.add(value)) {
+        result.add(value);
+      }
+    }
+    return result;
+  }
+
+  Future<void> _handleOperationFailure(
+    Object error,
+    String fallbackMessage,
+  ) async {
+    final message = _messageFor(error, fallbackMessage);
+    _lastErrorMessage = message;
+    _statusMessage = message;
+    if (error is ApiException) {
+      switch (error.kind) {
+        case ApiErrorKind.unauthorized:
+        case ApiErrorKind.forbidden:
+          await _expireSession(message);
+          return;
+        case ApiErrorKind.network:
+        case ApiErrorKind.timeout:
+          _connectionStatus = ConnectionStatus.unreachable;
+          break;
+        case ApiErrorKind.invalidRequest:
+        case ApiErrorKind.server:
+        case ApiErrorKind.invalidResponse:
+        case ApiErrorKind.conflict:
+        case ApiErrorKind.notFound:
+        case ApiErrorKind.unknown:
+          break;
+      }
     }
     notifyListeners();
+  }
+
+  Future<void> _expireSession(String message) async {
+    _isAuthenticated = false;
+    _isQueueProcessing = false;
+    _connectionStatus = ConnectionStatus.unauthorized;
+    _lastErrorMessage = message;
+    _statusMessage = message;
+    _settings = _settings.copyWith(userId: '', sessionCookie: '');
+    await _settingsService.save(_settings);
+    await _settingsService.clearSession();
+    await _backgroundSyncService.cancel();
+    await _disconnectWebsocket();
+    notifyListeners();
+  }
+
+  ConnectionStatus _statusForError(
+    Object error, {
+    bool authFailureIsInvalidCredentials = false,
+  }) {
+    if (error is ApiException) {
+      switch (error.kind) {
+        case ApiErrorKind.unauthorized:
+        case ApiErrorKind.forbidden:
+          return authFailureIsInvalidCredentials
+              ? ConnectionStatus.invalidCredentials
+              : ConnectionStatus.unauthorized;
+        case ApiErrorKind.network:
+        case ApiErrorKind.timeout:
+          return ConnectionStatus.unreachable;
+        case ApiErrorKind.invalidRequest:
+          return hasServerProfile
+              ? ConnectionStatus.signedOut
+              : ConnectionStatus.setupRequired;
+        case ApiErrorKind.server:
+        case ApiErrorKind.invalidResponse:
+        case ApiErrorKind.conflict:
+        case ApiErrorKind.notFound:
+        case ApiErrorKind.unknown:
+          return hasServerProfile
+              ? ConnectionStatus.unreachable
+              : ConnectionStatus.setupRequired;
+      }
+    }
+    return hasServerProfile
+        ? ConnectionStatus.unreachable
+        : ConnectionStatus.setupRequired;
+  }
+
+  ConnectionStatus _statusAfterLocalSave(bool accountChanged) {
+    if (!hasServerProfile) {
+      return ConnectionStatus.setupRequired;
+    }
+    if (accountChanged) {
+      return ConnectionStatus.signedOut;
+    }
+    return _isAuthenticated
+        ? ConnectionStatus.connected
+        : ConnectionStatus.signedOut;
+  }
+
+  String _messageFor(Object error, String fallbackMessage) {
+    if (error is ApiException) {
+      return error.message;
+    }
+    return fallbackMessage;
   }
 
   Future<void> _configureBackgroundSync() async {
@@ -350,6 +916,9 @@ class AppState extends ChangeNotifier {
   }
 
   void _handleWsEvent(WsEvent event) {
+    if (_disposed) {
+      return;
+    }
     if (event.userId != null && event.userId != _settings.userId) {
       return;
     }
@@ -359,22 +928,35 @@ class AppState extends ChangeNotifier {
         if (url == null || url.isEmpty) {
           return;
         }
-        final existingIndex = _downloadQueue.indexWhere((item) => item.url == url);
-        final index = existingIndex >= 0 ? existingIndex : _downloadQueue.length;
+        final existingIndex = _downloadQueue.indexWhere(
+          (item) => item.url == url,
+        );
+        final index = existingIndex >= 0
+            ? existingIndex
+            : _downloadQueue.length;
         if (existingIndex < 0) {
           _downloadQueue = [..._downloadQueue, DownloadQueueItem(url: url)];
         }
         final data = event.data;
         final status = _parseDownloadStatus(data['status']?.toString());
+        final error = status == DownloadStatus.error
+            ? _friendlyDownloadError(data['error'])
+            : null;
         final updated = _downloadQueue[index].copyWith(
           status: status,
           title: data['title']?.toString(),
           artist: data['artist']?.toString(),
           id: data['id']?.toString(),
-          percentage: num.tryParse(data['percentage']?.toString() ?? '')?.toDouble(),
-          downloadedBytes: num.tryParse(data['downloaded_bytes']?.toString() ?? '')?.toInt(),
-          totalBytes: num.tryParse(data['total_bytes']?.toString() ?? '')?.toInt(),
-          error: data['error']?.toString(),
+          percentage: num.tryParse(
+            data['percentage']?.toString() ?? '',
+          )?.toDouble(),
+          downloadedBytes: num.tryParse(
+            data['downloaded_bytes']?.toString() ?? '',
+          )?.toInt(),
+          totalBytes: num.tryParse(
+            data['total_bytes']?.toString() ?? '',
+          )?.toInt(),
+          error: error,
         );
         _downloadQueue = [
           ..._downloadQueue.sublist(0, index),
@@ -385,13 +967,15 @@ class AppState extends ChangeNotifier {
         break;
       case 'download_complete':
         _isQueueProcessing = false;
+        _statusMessage = 'Downloads complete';
         unawaited(refreshSongs());
         unawaited(refreshQueue());
         notifyListeners();
         break;
       case 'download_error':
         _isQueueProcessing = false;
-        _statusMessage = 'Download failed: ${event.data['error']?.toString() ?? 'Unknown error'}';
+        _lastErrorMessage = _friendlyDownloadError(event.data['error']);
+        _statusMessage = _lastErrorMessage!;
         notifyListeners();
         break;
       case 'queue_updated':
@@ -403,6 +987,29 @@ class AppState extends ChangeNotifier {
       default:
         break;
     }
+  }
+
+  String _friendlyDownloadError(Object? rawError) {
+    final message = rawError?.toString().toLowerCase() ?? '';
+    if (message.contains('private') ||
+        message.contains('unavailable') ||
+        message.contains('removed')) {
+      return 'Download failed. This video is unavailable.';
+    }
+    if (message.contains('age')) {
+      return 'Download failed. This video requires age verification.';
+    }
+    if (message.contains('copyright') ||
+        message.contains('blocked') ||
+        message.contains('region')) {
+      return 'Download failed. This video is blocked for downloads.';
+    }
+    if (message.contains('timeout') ||
+        message.contains('network') ||
+        message.contains('connection')) {
+      return 'Download failed. Check your connection and try again.';
+    }
+    return 'Download failed. Check the link and try again.';
   }
 
   DownloadStatus _parseDownloadStatus(String? status) {
@@ -463,6 +1070,8 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
+    unawaited(_shareSubscription?.cancel());
     unawaited(_disconnectWebsocket());
     super.dispose();
   }
