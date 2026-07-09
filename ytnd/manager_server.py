@@ -1533,27 +1533,52 @@ if WEBDAV_ENABLED:
 # ───────────────────────── Frontend ─────────────────────────
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIR / "assets")), name="assets")
-    
-    @app.get("/vite.svg")
-    async def serve_vite_svg():
-        vite_svg = FRONTEND_DIR / "vite.svg"
-        if vite_svg.exists():
-            return FileResponse(vite_svg)
+
+    _FRONTEND_ROOT_ASSETS = {
+        "favicon.ico": "image/x-icon",
+        "favicon-32x32.png": "image/png",
+        "apple-touch-icon.png": "image/png",
+        "site.webmanifest": "application/manifest+json",
+        "icon-192.png": "image/png",
+        "icon-512.png": "image/png",
+        "logo.png": "image/png",
+        "logo.svg": "image/svg+xml",
+    }
+    _FRONTEND_ASSET_HEADERS = {"Cache-Control": "no-cache"}
+
+    @app.get("/favicon.ico")
+    @app.get("/favicon-32x32.png")
+    @app.get("/apple-touch-icon.png")
+    @app.get("/site.webmanifest")
+    @app.get("/icon-192.png")
+    @app.get("/icon-512.png")
+    @app.get("/logo.png")
+    @app.get("/logo.svg")
+    async def serve_frontend_root_asset(request: Request):
+        asset_name = request.url.path.rsplit("/", 1)[-1]
+        asset = FRONTEND_DIR / asset_name
+        if asset.exists():
+            return FileResponse(
+                asset,
+                media_type=_FRONTEND_ROOT_ASSETS[asset_name],
+                headers=_FRONTEND_ASSET_HEADERS,
+            )
         raise HTTPException(status_code=404, detail="Not found")
 
-    @app.get("/logo.png")
-    async def serve_logo():
-        logo = FRONTEND_DIR / "logo.png"
-        if logo.exists():
-            return FileResponse(logo, media_type="image/png")
+    @app.get("/vite.svg")
+    async def serve_legacy_vite_icon():
+        icon = FRONTEND_DIR / "icon-192.png"
+        if icon.exists():
+            return FileResponse(icon, media_type="image/png", headers=_FRONTEND_ASSET_HEADERS)
         raise HTTPException(status_code=404, detail="Not found")
-    
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """Serve index.html for all routes to enable client-side routing."""
-        if full_path.startswith("api/") or full_path.startswith("auth/"):
+        backend_route = full_path.split("/", 1)[0]
+        if backend_route in {"api", "auth", "webdav"}:
             raise HTTPException(status_code=404, detail="Not found")
-        
+
         index_file = FRONTEND_DIR / "index.html"
         if index_file.exists():
             return FileResponse(index_file, media_type="text/html")
