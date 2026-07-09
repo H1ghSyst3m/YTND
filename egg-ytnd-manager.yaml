@@ -21,7 +21,7 @@ docker_images:
 file_denylist: {  }
 startup_commands:
   Default: >-
-    bash -lc 'if [ -z "${MANAGER_BASE_URL:-}" ]; then unset MANAGER_BASE_URL; fi; export MANAGER_HOST=0.0.0.0; export MANAGER_PORT="{{MANAGER_PORT}}"; export DATA_ROOT=/home/container/data; export DATABASE_FILE=/home/container/data/ytnd.db; export COOKIES_FILE=/home/container/data/cookies.txt; export FFMPEG_PATH=/home/container/bin/ffmpeg; echo "Checking yt-dlp update..."; /home/container/.venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true; if /home/container/.venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir --upgrade "yt-dlp"; then echo "yt-dlp version: $(/home/container/.venv/bin/python -m yt_dlp --version)"; else echo "WARNING: yt-dlp update failed; continuing with installed version"; fi; exec /home/container/.venv/bin/python -m ytnd.manager_server'
+    bash -lc 'if [ -z "${MANAGER_BASE_URL:-}" ]; then unset MANAGER_BASE_URL; fi; export MANAGER_HOST=0.0.0.0; export MANAGER_PORT={{SERVER_PORT}}; export DATA_ROOT=/home/container/data; export DATABASE_FILE=/home/container/data/ytnd.db; export COOKIES_FILE=/home/container/data/cookies.txt; export FFMPEG_PATH=/home/container/bin/ffmpeg; echo "Checking yt-dlp update..."; /home/container/.venv/bin/python -m ensurepip --upgrade >/dev/null 2>&1 || true; if /home/container/.venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir --upgrade "yt-dlp"; then echo "yt-dlp version: $(/home/container/.venv/bin/python -m yt_dlp --version)"; else echo "WARNING: yt-dlp update failed; continuing with installed version"; fi; exec /home/container/.venv/bin/python -m ytnd.manager_server'
 config:
   files: {  }
   startup:
@@ -166,18 +166,6 @@ variables:
       - 'max:256'
   -
     sort: 4
-    name: 'Manager Port'
-    description: 'Port the YTND manager binds to. This must match the Pelican server allocation port.'
-    env_variable: MANAGER_PORT
-    default_value: 9863
-    user_viewable: true
-    user_editable: true
-    rules:
-      - required
-      - integer
-      - 'between:1,65535'
-  -
-    sort: 5
     name: 'Manager Base URL'
     description: 'Optional public base URL, for example https://ytnd.example.com. Leave empty for YTND defaults.'
     env_variable: MANAGER_BASE_URL
@@ -189,11 +177,11 @@ variables:
       - string
       - 'max:255'
   -
-    sort: 6
+    sort: 5
     name: 'Enable WebDAV'
     description: 'Expose downloaded audio through the YTND WebDAV endpoint on the same server port.'
     env_variable: WEBDAV_ENABLED
-    default_value: true
+    default_value: 1
     user_viewable: true
     user_editable: true
     rules:
