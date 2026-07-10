@@ -43,6 +43,7 @@ from .utils import (
     is_youtube_playlist_url,
     strip_playlist_context,
     logger,
+    locked_json_path,
     write_json_atomic,
 )
 from . import database
@@ -491,18 +492,21 @@ def _list_users() -> List[str]:
         return []
     return sorted([p.name for p in OUTPUT_ROOT.iterdir() if p.is_dir()])
 
-def _song_list_for_user(user_id: str) -> List[dict]:
-    try:
-        user_id = sanitize_user_id(user_id)
-    except ValueError:
-        return []
-    
+def _song_list_path_for_user(user_id: str) -> Path:
+    user_id = sanitize_user_id(user_id)
     folder = OUTPUT_ROOT / user_id
     
     if OUTPUT_ROOT.resolve() not in folder.resolve().parents:
-        return []
+        raise ValueError("Invalid folder path")
     
-    f = folder / "song-list.json"
+    return folder / "song-list.json"
+
+def _song_list_for_user(user_id: str) -> List[dict]:
+    try:
+        f = _song_list_path_for_user(user_id)
+    except ValueError:
+        return []
+
     if not f.exists():
         return []
     try:
@@ -554,18 +558,32 @@ def _song_downloaded_at(song: dict, audio_file: Optional[Path]) -> Optional[str]
 
 def _write_song_list(user_id: str, items: List[dict]) -> None:
     try:
-        user_id = sanitize_user_id(user_id)
+        f = _song_list_path_for_user(user_id)
     except ValueError as e:
         raise ValueError(f"Invalid user_id: {e}")
     
-    folder = OUTPUT_ROOT / user_id
-    
-    if OUTPUT_ROOT.resolve() not in folder.resolve().parents:
-        raise ValueError("Invalid folder path")
-    
-    folder.mkdir(parents=True, exist_ok=True)
-    f = folder / "song-list.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(f, items)
+
+def _backfill_song_downloaded_at(user_id: str) -> None:
+    song_list_path = _song_list_path_for_user(user_id)
+    with locked_json_path(song_list_path):
+        songs = _song_list_for_user(user_id)
+        changed = False
+        for song in songs:
+            if song.get("downloaded_at"):
+                continue
+            title = song.get("title") or ""
+            artist = song.get("artist") or ""
+            downloaded_at = _song_downloaded_at(
+                song,
+                _find_audio_file(user_id, title, artist),
+            )
+            if downloaded_at:
+                song["downloaded_at"] = downloaded_at
+                changed = True
+        if changed:
+            _write_song_list(user_id, songs)
 
 def _probe_url_available(url: str) -> Tuple[bool, str]:
     if len(url) > 2000:
@@ -1059,7 +1077,6 @@ def api_songs(
             f_cover = _find_cover_file(user_id, s)
             downloaded_at = _song_downloaded_at(s, f_audio)
             if downloaded_at and not s.get("downloaded_at"):
-                s["downloaded_at"] = downloaded_at
                 backfilled_download_dates = True
             enriched.append({
                 **s,
@@ -1081,7 +1098,7 @@ def api_songs(
             })
     if backfilled_download_dates:
         try:
-            _write_song_list(user_id, songs)
+            _backfill_song_downloaded_at(user_id)
         except Exception as e:
             logger.warning("Failed to backfill downloaded_at for user %s: %s", user_id, e)
     return {"songs": enriched}

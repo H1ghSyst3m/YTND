@@ -207,6 +207,60 @@ def test_api_songs_backfills_downloaded_at_from_audio_mtime(client):
     assert saved[0]["downloaded_at"] == expected
 
 
+def test_api_songs_backfill_reloads_latest_song_list_before_write(client, monkeypatch):
+    uid = "songdataconcurrent"
+    try:
+        database.add_user(uid)
+    except ValueError:
+        pass
+    folder = manager_module.OUTPUT_ROOT / uid
+    folder.mkdir(parents=True, exist_ok=True)
+    initial = [{"id": "video-old", "title": "Old", "artist": "Artist"}]
+    concurrent = [
+        {"id": "video-old", "title": "Old", "artist": "Artist"},
+        {
+            "id": "video-new",
+            "title": "Concurrent",
+            "artist": "Writer",
+            "downloaded_at": "2026-01-01T00:00:00.000000Z",
+        },
+    ]
+    song_list = folder / "song-list.json"
+    song_list.write_text(json.dumps(initial), encoding="utf-8")
+    audio = folder / "Old # Artist.opus"
+    audio.write_bytes(b"audio")
+    timestamp = 1_750_000_000
+    os.utime(audio, (timestamp, timestamp))
+
+    original_find_audio = manager_module._find_audio_file
+    wrote_concurrent_snapshot = False
+
+    def race_find_audio(user_id, title, artist):
+        nonlocal wrote_concurrent_snapshot
+        result = original_find_audio(user_id, title, artist)
+        if not wrote_concurrent_snapshot:
+            wrote_concurrent_snapshot = True
+            song_list.write_text(json.dumps(concurrent), encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(manager_module, "_find_audio_file", race_find_audio)
+
+    response = client.get(
+        "/api/songs",
+        params={"user_id": uid},
+        cookies={
+            SESSION_UID_COOKIE: uid,
+            SESSION_SIG_COOKIE: _sign_uid(uid),
+        },
+    )
+
+    assert response.status_code == 200
+    saved = json.loads(song_list.read_text(encoding="utf-8"))
+    assert [song["id"] for song in saved] == ["video-old", "video-new"]
+    assert saved[0]["downloaded_at"]
+    assert saved[1]["downloaded_at"] == "2026-01-01T00:00:00.000000Z"
+
+
 def test_api_songs_returns_null_downloaded_at_without_audio(client):
     uid = "songdatenull"
     try:

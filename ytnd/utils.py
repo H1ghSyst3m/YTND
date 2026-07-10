@@ -11,13 +11,13 @@ from .config import LOG_DIR
 _illegal = r'[/\\:*?"<>|]'
 _re_illegal = re.compile(_illegal)
 _json_write_locks_guard = threading.Lock()
-_json_write_locks: dict[Path, threading.Lock] = {}
+_json_write_locks: dict[Path, threading.RLock] = {}
 
 @contextmanager
-def _locked_json_path(path: Path):
+def locked_json_path(path: Path):
     resolved = path.resolve()
     with _json_write_locks_guard:
-        lock = _json_write_locks.setdefault(resolved, threading.Lock())
+        lock = _json_write_locks.setdefault(resolved, threading.RLock())
     with lock:
         yield resolved
 
@@ -61,7 +61,7 @@ def write_json_atomic(
     ensure_ascii: bool = False,
 ) -> None:
     """Write JSON through a temp file and atomic replace."""
-    with _locked_json_path(path) as target:
+    with locked_json_path(path) as target:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(
             f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp"

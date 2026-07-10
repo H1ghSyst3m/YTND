@@ -841,11 +841,7 @@ class AppState extends ChangeNotifier {
 
   Future<bool> retryFailedDownload(DownloadQueueItem item) async {
     final result = await addUrlsToQueue([item.url]);
-    if (result == QueueAddResult.failed) {
-      return false;
-    }
-    dismissLocalQueueItem(item.url);
-    return true;
+    return result == QueueAddResult.added;
   }
 
   void dismissLocalQueueItem(String url) {
