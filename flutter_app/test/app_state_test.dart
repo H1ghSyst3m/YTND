@@ -525,6 +525,36 @@ void main() {
     expect(restored.isAuthenticated, isTrue);
   });
 
+  test(
+    'sync preference rollback restores persisted settings after configure failure',
+    () async {
+      final settings = FakeSettingsService(settings: _signedInSettings);
+      final background = FakeBackgroundSyncService();
+      final state = _buildState(
+        settingsService: settings,
+        backgroundSyncService: background,
+      );
+      await state.initialize();
+      background.configureError = Exception('configure failed');
+
+      final saved = await state.updateSyncPreferences(
+        syncIntervalHours: 2,
+        syncWifiOnly: true,
+        syncOnStartup: true,
+      );
+
+      expect(saved, isFalse);
+      expect(state.settings.syncIntervalHours, 0);
+      expect(state.settings.syncWifiOnly, isFalse);
+      expect(state.settings.syncOnStartup, isFalse);
+      expect(settings.settings.syncIntervalHours, 0);
+      expect(settings.settings.syncWifiOnly, isFalse);
+      expect(settings.settings.syncOnStartup, isFalse);
+      expect(settings.savedSettings.last.syncIntervalHours, 0);
+      expect(state.statusMessage, 'Could not save sync settings.');
+    },
+  );
+
   test('logout clears session but preserves sync and storage settings', () async {
     _mockConnectivity(binding, ['wifi']);
     final temp = await Directory.systemTemp.createTemp('ytnd_logout_settings');
@@ -655,6 +685,27 @@ void main() {
     expect(state.inProgressQueue, hasLength(1));
     expect(state.queuedQueue, isEmpty);
     expect(state.inProgressQueue.single.percentage, 42);
+
+    await state.refreshQueue();
+
+    expect(state.inProgressQueue.single.status, DownloadStatus.downloading);
+    expect(state.inProgressQueue.single.percentage, 42);
+    expect(state.queuedQueue, isEmpty);
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_progress',
+        'url': 'https://music.youtube.com/watch?v=abc123',
+        'status': 'processing',
+        'percentage': 100,
+      }),
+    );
+    await pumpEventQueue();
+    await state.refreshQueue();
+
+    expect(state.inProgressQueue.single.status, DownloadStatus.processing);
+    expect(state.inProgressQueue.single.percentage, 100);
+    expect(state.queuedQueue, isEmpty);
   });
 
   test('failed websocket progress appears in failed queue section', () async {

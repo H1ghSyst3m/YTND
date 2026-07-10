@@ -19,16 +19,25 @@ class FakeSettingsService extends SettingsService {
   List<String> pendingShareUrls;
   String? dismissedConnectionNoticeKey;
   Object? saveError;
+  Completer<void>? saveCompleter;
+  int saveCalls = 0;
+  final List<AppSettings> savedSettings = [];
 
   @override
   Future<AppSettings> load() async => settings;
 
   @override
   Future<void> save(AppSettings settings) async {
+    saveCalls++;
+    final completer = saveCompleter;
+    if (completer != null) {
+      await completer.future;
+    }
     final error = saveError;
     if (error != null) {
       throw error;
     }
+    savedSettings.add(settings);
     this.settings = settings;
   }
 
@@ -198,13 +207,22 @@ class FakeApiService extends ApiService {
 class FakeBackgroundSyncService extends BackgroundSyncService {
   bool configured = false;
   bool cancelled = false;
+  int configureCalls = 0;
+  Object? configureError;
+  AppSettings? configuredSettings;
 
   @override
   Future<void> initialize() async {}
 
   @override
   Future<void> configure(AppSettings settings) async {
+    configureCalls++;
+    final error = configureError;
+    if (error != null) {
+      throw error;
+    }
     configured = true;
+    configuredSettings = settings;
   }
 
   @override

@@ -539,6 +539,9 @@ class _SongCover extends StatefulWidget {
     if (provider == null) {
       return null;
     }
+    if (provider is FileImage && !provider.file.existsSync()) {
+      return null;
+    }
     _providerCache[coverUrl] = provider;
     return provider;
   }

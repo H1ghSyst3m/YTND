@@ -16,6 +16,7 @@ class CoverCacheService {
 
   static const _requestTimeout = Duration(seconds: 15);
   static const _downloadTimeout = Duration(seconds: 30);
+  static const _maxCoverBytes = 10 * 1024 * 1024;
 
   final Directory? _cacheDirectoryOverride;
   final HttpClient Function() _clientFactory;
@@ -110,10 +111,23 @@ class CoverCacheService {
         await response.drain<void>();
         return null;
       }
+      final contentLength = response.contentLength;
+      if (contentLength >= 0 && contentLength > _maxCoverBytes) {
+        return null;
+      }
 
       await targetFile.parent.create(recursive: true);
       sink = tmpFile.openWrite();
-      await response.pipe(sink).timeout(_downloadTimeout);
+      var totalBytes = 0;
+      await for (final chunk in response.timeout(_downloadTimeout)) {
+        totalBytes += chunk.length;
+        if (totalBytes > _maxCoverBytes) {
+          throw const _CoverTooLargeException();
+        }
+        sink.add(chunk);
+      }
+      await sink.close();
+      sink = null;
       final cachedFile = await tmpFile.rename(targetFile.path);
       _memoryCache[coverUrl] = cachedFile;
       return cachedFile;
@@ -180,4 +194,8 @@ class CoverCacheService {
     }
     return hash.toRadixString(16).padLeft(8, '0');
   }
+}
+
+class _CoverTooLargeException implements Exception {
+  const _CoverTooLargeException();
 }

@@ -23,6 +23,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _syncWifiOnly;
   late bool _syncOnStartup;
   bool _obscurePassword = true;
+  bool _isSavingSyncPreferences = false;
+  int _syncPreferenceRevision = 0;
+  final List<_SyncPreferenceDraft> _syncPreferenceQueue = [];
 
   static const List<int> _syncIntervals = [0, 1, 2, 6, 12];
 
@@ -34,9 +37,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _usernameController = TextEditingController(text: settings.username);
     _passwordController = TextEditingController(text: settings.password);
     _storageController = TextEditingController(text: settings.storagePath);
-    _syncInterval = _syncIntervals.contains(settings.syncIntervalHours)
-        ? settings.syncIntervalHours
-        : _syncIntervals.first;
+    _syncInterval = _normalizedSyncInterval(settings.syncIntervalHours);
     _syncWifiOnly = settings.syncWifiOnly;
     _syncOnStartup = settings.syncOnStartup;
   }
@@ -62,12 +63,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     bool? syncWifiOnly,
     bool? syncOnStartup,
   }) async {
-    final previousInterval = _syncInterval;
-    final previousWifiOnly = _syncWifiOnly;
-    final previousOnStartup = _syncOnStartup;
-    final nextInterval = syncIntervalHours ?? _syncInterval;
+    final nextInterval = _normalizedSyncInterval(
+      syncIntervalHours ?? _syncInterval,
+    );
     final nextWifiOnly = syncWifiOnly ?? _syncWifiOnly;
     final nextOnStartup = syncOnStartup ?? _syncOnStartup;
+    final revision = ++_syncPreferenceRevision;
 
     setState(() {
       _syncInterval = nextInterval;
@@ -75,24 +76,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _syncOnStartup = nextOnStartup;
     });
 
-    final appState = context.read<AppState>();
-    final saved = await appState.updateSyncPreferences(
-      syncIntervalHours: nextInterval,
-      syncWifiOnly: nextWifiOnly,
-      syncOnStartup: nextOnStartup,
+    _syncPreferenceQueue.add(
+      _SyncPreferenceDraft(
+        revision: revision,
+        syncIntervalHours: nextInterval,
+        syncWifiOnly: nextWifiOnly,
+        syncOnStartup: nextOnStartup,
+      ),
     );
 
-    if (!saved && mounted) {
-      setState(() {
-        _syncInterval = previousInterval;
-        _syncWifiOnly = previousWifiOnly;
-        _syncOnStartup = previousOnStartup;
-      });
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(appState.statusMessage)));
+    if (!_isSavingSyncPreferences) {
+      await _drainSyncPreferenceQueue();
     }
   }
+
+  Future<void> _drainSyncPreferenceQueue() async {
+    if (_isSavingSyncPreferences) {
+      return;
+    }
+
+    setState(() => _isSavingSyncPreferences = true);
+    final appState = context.read<AppState>();
+    try {
+      while (mounted && _syncPreferenceQueue.isNotEmpty) {
+        final draft = _syncPreferenceQueue.removeAt(0);
+        final saved = await appState.updateSyncPreferences(
+          syncIntervalHours: draft.syncIntervalHours,
+          syncWifiOnly: draft.syncWifiOnly,
+          syncOnStartup: draft.syncOnStartup,
+        );
+
+        if (!saved && mounted && draft.revision == _syncPreferenceRevision) {
+          _syncPreferenceQueue.clear();
+          final settings = appState.settings;
+          setState(() {
+            _syncInterval = _normalizedSyncInterval(
+              settings.syncIntervalHours,
+            );
+            _syncWifiOnly = settings.syncWifiOnly;
+            _syncOnStartup = settings.syncOnStartup;
+          });
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(appState.statusMessage)));
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingSyncPreferences = false);
+      }
+    }
+  }
+
+  int _normalizedSyncInterval(int value) =>
+      _syncIntervals.contains(value) ? value : _syncIntervals.first;
 
   AppSettings _buildSettings(AppState appState) {
     return appState.settings.copyWith(
@@ -296,11 +333,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   DropdownMenuItem(value: 6, child: Text('Every 6 hours')),
                   DropdownMenuItem(value: 12, child: Text('Every 12 hours')),
                 ],
-                onChanged: (value) {
-                  if (value != null) {
-                    _updateSyncPreferences(syncIntervalHours: value);
-                  }
-                },
+                onChanged: _isSavingSyncPreferences
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          _updateSyncPreferences(syncIntervalHours: value);
+                        }
+                      },
               ),
               const SizedBox(height: 6),
               _SwitchRow(
@@ -308,8 +347,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 title: 'Sync on startup',
                 subtitle: 'Run once after a saved session is restored',
                 value: _syncOnStartup,
-                onChanged: (value) =>
-                    _updateSyncPreferences(syncOnStartup: value),
+                onChanged: _isSavingSyncPreferences
+                    ? null
+                    : (value) => _updateSyncPreferences(syncOnStartup: value),
               ),
               _SwitchRow(
                 icon: Icons.wifi,
@@ -318,7 +358,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ? 'Not used for manual sync'
                     : null,
                 value: _syncWifiOnly,
-                onChanged: _syncInterval == 0 && !_syncOnStartup
+                onChanged: _isSavingSyncPreferences ||
+                        (_syncInterval == 0 && !_syncOnStartup)
                     ? null
                     : (value) => _updateSyncPreferences(syncWifiOnly: value),
               ),
@@ -407,6 +448,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
     );
   }
+}
+
+class _SyncPreferenceDraft {
+  const _SyncPreferenceDraft({
+    required this.revision,
+    required this.syncIntervalHours,
+    required this.syncWifiOnly,
+    required this.syncOnStartup,
+  });
+
+  final int revision;
+  final int syncIntervalHours;
+  final bool syncWifiOnly;
+  final bool syncOnStartup;
 }
 
 class _ConnectionStatusRow extends StatelessWidget {

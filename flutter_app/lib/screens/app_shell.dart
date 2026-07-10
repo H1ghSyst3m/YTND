@@ -117,11 +117,12 @@ class _AppShellState extends State<AppShell> {
 
   List<Widget> _actionsFor(BuildContext context, AppState appState) {
     final actions = <Widget>[];
-    if (appState.latestSyncSummary != null) {
+    final syncSummary = appState.latestSyncSummary;
+    if (syncSummary != null) {
       actions.add(
         IconButton(
           tooltip: 'Sync details',
-          onPressed: () => _showSyncDetails(context, appState.latestSyncSummary!),
+          onPressed: () => _showSyncDetails(context, syncSummary),
           icon: const Icon(Icons.receipt_long_outlined),
         ),
       );
@@ -131,12 +132,16 @@ class _AppShellState extends State<AppShell> {
       actions.addAll([
         IconButton(
           tooltip: 'Refresh songs',
-          onPressed: appState.isLibraryLoading ? null : appState.refreshSongs,
+          onPressed: !appState.isAuthenticated || appState.isLibraryLoading
+              ? null
+              : appState.refreshSongs,
           icon: const Icon(Icons.refresh),
         ),
         IconButton(
           tooltip: appState.isSyncing ? 'Syncing' : 'Sync now',
-          onPressed: appState.isSyncing ? null : appState.syncNow,
+          onPressed: !appState.isAuthenticated || appState.isSyncing
+              ? null
+              : appState.syncNow,
           icon: appState.isSyncing
               ? const SizedBox.square(
                   dimension: 18,
@@ -149,7 +154,9 @@ class _AppShellState extends State<AppShell> {
       actions.addAll([
         IconButton(
           tooltip: 'Refresh queue',
-          onPressed: appState.isQueueLoading ? null : appState.refreshQueue,
+          onPressed: !appState.isAuthenticated || appState.isQueueLoading
+              ? null
+              : appState.refreshQueue,
           icon: const Icon(Icons.refresh),
         ),
         IconButton(
@@ -440,7 +447,7 @@ class _SyncDetailsSheet extends StatelessWidget {
                 IconButton(
                   tooltip: 'Close',
                   onPressed: () {
-                    appState.clearLatestSyncSummary();
+                    appState.clearLatestSyncSummary(summary);
                     Navigator.of(context).pop();
                   },
                   icon: const Icon(Icons.close),

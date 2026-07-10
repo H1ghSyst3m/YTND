@@ -198,7 +198,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void clearLatestSyncSummary() {
+  void clearLatestSyncSummary([SyncSummary? expectedSummary]) {
+    if (expectedSummary != null &&
+        !identical(_latestSyncSummary, expectedSummary)) {
+      return;
+    }
     _latestSyncSummary = null;
     notifyListeners();
   }
@@ -438,6 +442,13 @@ class AppState extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('Saving sync preferences failed: $e\n$st');
       _settings = previousSettings;
+      try {
+        await _settingsService.save(previousSettings);
+      } catch (rollbackError, rollbackStack) {
+        debugPrint(
+          'Restoring sync preferences failed: $rollbackError\n$rollbackStack',
+        );
+      }
       _lastErrorMessage = _messageFor(e, 'Could not save sync settings.');
       _statusMessage = _lastErrorMessage!;
       _markFreshConnectionNotice();
@@ -1291,6 +1302,9 @@ class AppState extends ChangeNotifier {
       merged.add(
         current == null
             ? DownloadQueueItem(url: url)
+            : current.status == DownloadStatus.downloading ||
+                  current.status == DownloadStatus.processing
+            ? current
             : current.copyWith(
                 status: DownloadStatus.pending,
                 percentage: null,

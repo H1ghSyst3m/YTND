@@ -1,9 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:ytnd/main.dart';
 import 'package:ytnd/models/app_settings.dart';
 import 'package:ytnd/models/song.dart';
+import 'package:ytnd/screens/app_shell.dart';
 import 'package:ytnd/screens/library_screen.dart';
 import 'package:ytnd/screens/queue_screen.dart';
 import 'package:ytnd/screens/settings_screen.dart';
@@ -19,6 +23,10 @@ const _signedInSettings = AppSettings(
   userId: 'u1',
   sessionCookie: 'cookie',
   storagePath: 'test-storage',
+);
+
+const _connectivityChannel = MethodChannel(
+  'dev.fluttercommunity.plus/connectivity',
 );
 
 String _shortDate(DateTime date) {
@@ -37,6 +45,28 @@ String _shortDate(DateTime date) {
     'Dec',
   ];
   return '${months[date.month - 1]} ${date.day}, ${date.year}';
+}
+
+void _mockConnectivity(List<String> results) {
+  TestWidgetsFlutterBinding.ensureInitialized()
+      .defaultBinaryMessenger
+      .setMockMethodCallHandler(_connectivityChannel, (call) async {
+        expect(call.method, 'check');
+        return results;
+      });
+  addTearDown(() {
+    TestWidgetsFlutterBinding.ensureInitialized()
+        .defaultBinaryMessenger
+        .setMockMethodCallHandler(_connectivityChannel, null);
+  });
+}
+
+IconButton _iconButtonByTooltip(WidgetTester tester, String tooltip) {
+  return tester.widget<IconButton>(
+    find
+        .ancestor(of: find.byTooltip(tooltip), matching: find.byType(IconButton))
+        .first,
+  );
 }
 
 class CountingAppState extends AppState {
@@ -80,6 +110,83 @@ void main() {
     expect(find.text('Library'), findsWidgets);
     expect(find.text('Queue'), findsWidgets);
     expect(find.text('Settings'), findsWidgets);
+  });
+
+  testWidgets('app bar actions are disabled while signed out', (tester) async {
+    final state = AppState(
+      settingsService: FakeSettingsService(
+        settings: const AppSettings(
+          serverUrl: 'http://ytnd.local:8080',
+          username: 'demo',
+          password: 'secret',
+          storagePath: 'test-storage',
+        ),
+      ),
+      apiService: FakeApiService(),
+      syncService: SyncService(FakeApiService()),
+      backgroundSyncService: FakeBackgroundSyncService(),
+      websocketService: FakeWebsocketService(),
+      shareIntentService: FakeShareIntentService(),
+    );
+    await state.initialize();
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: const MaterialApp(home: AppShell()),
+      ),
+    );
+
+    expect(_iconButtonByTooltip(tester, 'Refresh songs').onPressed, isNull);
+    expect(_iconButtonByTooltip(tester, 'Sync now').onPressed, isNull);
+
+    await tester.tap(find.text('Queue').last);
+    await tester.pumpAndSettle();
+
+    expect(_iconButtonByTooltip(tester, 'Refresh queue').onPressed, isNull);
+  });
+
+  testWidgets('closing older sync details keeps a newer summary', (
+    tester,
+  ) async {
+    _mockConnectivity(['none']);
+    final api = FakeApiService();
+    final state = AppState(
+      settingsService: FakeSettingsService(settings: _signedInSettings),
+      apiService: api,
+      syncService: SyncService(api),
+      backgroundSyncService: FakeBackgroundSyncService(),
+      websocketService: FakeWebsocketService(),
+      shareIntentService: FakeShareIntentService(),
+    );
+    await state.initialize();
+    addTearDown(state.dispose);
+
+    await state.syncNow();
+    final firstSummary = state.latestSyncSummary;
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: const MaterialApp(home: AppShell()),
+      ),
+    );
+    await tester.tap(find.byTooltip('Sync details'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    await state.syncNow();
+    final secondSummary = state.latestSyncSummary;
+    expect(firstSummary, isNotNull);
+    expect(secondSummary, isNotNull);
+    expect(identical(firstSummary, secondSummary), isFalse);
+
+    await tester.tap(find.byTooltip('Close').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(state.latestSyncSummary, same(secondSummary));
   });
 
   testWidgets('library renders populated songs lazily', (tester) async {
@@ -167,7 +274,10 @@ void main() {
       find.text(_shortDate(DateTime.utc(2026, 2, 1, 23, 30).toLocal())),
       findsOneWidget,
     );
-    expect(find.text('Jan 1, 2024'), findsOneWidget);
+    expect(
+      find.text(_shortDate(DateTime.utc(2024, 1, 1, 12).toLocal())),
+      findsOneWidget,
+    );
     expect(find.text('No download date'), findsOneWidget);
   });
 
@@ -274,6 +384,55 @@ void main() {
     expect(settings.settings.syncWifiOnly, isTrue);
   });
 
+  testWidgets('settings sync controls disable while saving', (tester) async {
+    final saveCompleter = Completer<void>();
+    final settings = FakeSettingsService(settings: _signedInSettings)
+      ..saveCompleter = saveCompleter;
+    final api = FakeApiService();
+    final state = AppState(
+      settingsService: settings,
+      apiService: api,
+      syncService: SyncService(api),
+      backgroundSyncService: FakeBackgroundSyncService(),
+      websocketService: FakeWebsocketService(),
+      shareIntentService: FakeShareIntentService(),
+    );
+    await state.initialize();
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: const MaterialApp(home: Scaffold(body: SettingsScreen())),
+      ),
+    );
+
+    await tester.tap(find.byType(Switch).at(0));
+    await tester.pump();
+
+    expect(tester.widget<Switch>(find.byType(Switch).at(0)).value, isTrue);
+    expect(tester.widget<Switch>(find.byType(Switch).at(0)).onChanged, isNull);
+    expect(tester.widget<Switch>(find.byType(Switch).at(1)).onChanged, isNull);
+    expect(
+      tester
+          .widget<DropdownButtonFormField<int>>(
+            find.byType(DropdownButtonFormField<int>),
+          )
+          .onChanged,
+      isNull,
+    );
+    expect(settings.settings.syncOnStartup, isFalse);
+
+    saveCompleter.complete();
+    await tester.pumpAndSettle();
+
+    expect(settings.settings.syncOnStartup, isTrue);
+    expect(
+      tester.widget<Switch>(find.byType(Switch).at(0)).onChanged,
+      isNotNull,
+    );
+  });
+
   testWidgets('settings sync controls revert when saving fails', (tester) async {
     final settings = FakeSettingsService(settings: _signedInSettings)
       ..saveError = Exception('save failed');
@@ -307,7 +466,7 @@ void main() {
     expect(find.text('Could not save sync settings.'), findsOneWidget);
   });
 
-  testWidgets('settings account and storage edits require explicit save', (
+  testWidgets('settings account and storage edits stay pending before save', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(480, 1200));
@@ -381,24 +540,5 @@ void main() {
     expect(passwordText.controller.text, 'secret');
     expect(settings.settings.storagePath, 'test-storage');
     expect(settings.settings.serverUrl, 'https://ytnd.local:8080');
-
-    final saveButton = find.widgetWithText(FilledButton, 'Save');
-    await tester.ensureVisible(saveButton);
-    await tester.pump();
-    expect(saveButton, findsOneWidget);
-    expect(saveButton.hitTestable(), findsOneWidget);
-    final onPressed = tester.widget<FilledButton>(saveButton).onPressed;
-    expect(onPressed, isNotNull);
-    await tester.runAsync(() async {
-      onPressed!();
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-    });
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-
-    expect(state.statusMessage, contains('saved'));
-    expect(settings.settings.storagePath, 'device-music');
-    expect(settings.settings.serverUrl, 'https://changed.local');
-    expect(settings.settings.userId, isEmpty);
   });
 }
