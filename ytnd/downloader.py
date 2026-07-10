@@ -4,6 +4,7 @@ Downloader with persistent queue managed via database.
 """
 from __future__ import annotations
 import json, uuid, concurrent.futures, time, subprocess, shutil, os, re
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
@@ -29,6 +30,13 @@ JS_RUNTIME_BINARIES = {
     "node": ("node",),
     "quickjs": ("qjs", "quickjs"),
 }
+
+def _utc_now_iso() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 def _shorten(s: str, maxlen: int = 600) -> str:
     s = clean_ytdlp_message(s)
@@ -651,6 +659,7 @@ class Downloader:
             "artist": entry.uploader,
             "url": entry.url,
             "date": entry.upload_date,
+            "downloaded_at": _utc_now_iso(),
             "cover": cover_filename,
         }
         

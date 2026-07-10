@@ -79,11 +79,17 @@ class _QueueScreenState extends State<QueueScreen> {
   Widget build(BuildContext context) {
     return Consumer<AppState>(
       builder: (context, appState, _) {
+        final inProgress = appState.inProgressQueue;
+        final queued = appState.queuedQueue;
+        final failed = appState.failedQueue;
+        final hasQueueItems =
+            inProgress.isNotEmpty || queued.isNotEmpty || failed.isNotEmpty;
+
         return RefreshIndicator(
           onRefresh: appState.refreshQueue,
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+            padding: const EdgeInsets.fromLTRB(0, 10, 0, 96),
             children: [
               _QueueComposer(
                 controller: _urlController,
@@ -92,8 +98,7 @@ class _QueueScreenState extends State<QueueScreen> {
                 onSubmit: _submitCurrentInput,
                 onOpenSettings: widget.onOpenSettings,
               ),
-              if (appState.pendingShareUrls.isNotEmpty) ...[
-                const SizedBox(height: 12),
+              if (appState.pendingShareUrls.isNotEmpty)
                 _PendingSharePanel(
                   urls: appState.pendingShareUrls,
                   isAuthenticated: appState.isAuthenticated,
@@ -101,10 +106,10 @@ class _QueueScreenState extends State<QueueScreen> {
                   onAddPending: appState.retryPendingShareUrls,
                   onOpenSettings: widget.onOpenSettings,
                 ),
-              ],
-              const SizedBox(height: 16),
               _QueueActions(
-                itemCount: appState.downloadQueue.length,
+                queuedCount: queued.length,
+                inProgressCount: inProgress.length,
+                failedCount: failed.length,
                 isProcessing: appState.isQueueProcessing,
                 isLoading: appState.isQueueLoading,
                 isAuthenticated: appState.isAuthenticated,
@@ -112,18 +117,29 @@ class _QueueScreenState extends State<QueueScreen> {
                 onStart: appState.processQueue,
                 onClear: _confirmClearQueue,
               ),
-              const SizedBox(height: 12),
               if (appState.isQueueLoading) const LinearProgressIndicator(),
-              if (appState.isQueueLoading) const SizedBox(height: 12),
-              if (appState.downloadQueue.isEmpty)
+              if (!hasQueueItems)
                 _EmptyQueue(isAuthenticated: appState.isAuthenticated)
-              else
-                ...appState.downloadQueue.map(
-                  (item) => Padding(
-                    padding: const EdgeInsets.only(bottom: 10),
-                    child: _QueueItemTile(item: item),
+              else ...[
+                if (inProgress.isNotEmpty)
+                  _QueueSection(
+                    title: 'In progress',
+                    items: inProgress,
+                    emptyText: '',
                   ),
-                ),
+                if (queued.isNotEmpty)
+                  _QueueSection(
+                    title: 'Queued',
+                    items: queued,
+                    emptyText: '',
+                  ),
+                if (failed.isNotEmpty)
+                  _QueueSection(
+                    title: 'Failed',
+                    items: failed,
+                    emptyText: '',
+                  ),
+              ],
             ],
           ),
         );
@@ -150,80 +166,61 @@ class _QueueComposer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: scheme.surface,
-        border: Border.all(color: scheme.outlineVariant),
-      ),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.ios_share, color: scheme.primary),
-              const SizedBox(width: 10),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Add YouTube links',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    Text(
-                      isAuthenticated
-                          ? 'Paste links here or share directly from YouTube.'
-                          : 'Links are saved until you sign in.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  'Add YouTube links',
+                  style: Theme.of(context).textTheme.titleLarge,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: controller,
-            minLines: 2,
-            maxLines: 5,
-            textInputAction: TextInputAction.newline,
-            decoration: const InputDecoration(
-              labelText: 'YouTube URL',
-              hintText: 'Paste one or more links, one per line',
-              prefixIcon: Icon(Icons.link),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: isAdding ? null : onSubmit,
-                  icon: isAdding
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.playlist_add),
-                  label: Text(
-                    isAuthenticated ? 'Add to queue' : 'Save for sign-in',
-                  ),
-                ),
+              IconButton.filled(
+                tooltip: isAuthenticated ? 'Add to queue' : 'Save for sign-in',
+                onPressed: isAdding ? null : onSubmit,
+                icon: isAdding
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.add),
               ),
               if (!isAuthenticated) ...[
-                const SizedBox(width: 10),
-                IconButton.filledTonal(
+                const SizedBox(width: 6),
+                IconButton.outlined(
                   tooltip: 'Open Settings',
                   onPressed: onOpenSettings,
                   icon: const Icon(Icons.tune),
                 ),
               ],
             ],
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: controller,
+            minLines: 1,
+            maxLines: 3,
+            textInputAction: TextInputAction.newline,
+            decoration: InputDecoration(
+              labelText: 'YouTube URL',
+              hintText: isAuthenticated
+                  ? 'Paste one or more links'
+                  : 'Links are saved until you sign in',
+              prefixIcon: const Icon(Icons.link),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            isAuthenticated
+                ? 'Paste links here or share directly from YouTube.'
+                : 'Sign in later and pending links will be added automatically.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -249,20 +246,17 @@ class _PendingSharePanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: scheme.tertiaryContainer.withValues(alpha: 0.45),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Material(
+        color: scheme.tertiaryContainer.withValues(alpha: 0.35),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: scheme.tertiary.withValues(alpha: 0.35)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
             children: [
               Icon(Icons.pending_actions, color: scheme.tertiary),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   '${urls.length} shared link(s) waiting',
@@ -274,34 +268,11 @@ class _PendingSharePanel extends StatelessWidget {
                     ? (isAdding ? null : onAddPending)
                     : onOpenSettings,
                 icon: Icon(isAuthenticated ? Icons.playlist_add : Icons.tune),
-                label: Text(isAuthenticated ? 'Add now' : 'Settings'),
+                label: Text(isAuthenticated ? 'Add' : 'Settings'),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          ...urls
-              .take(3)
-              .map(
-                (url) => Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Text(
-                    url,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-              ),
-          if (urls.length > 3)
-            Text(
-              '+${urls.length - 3} more',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-        ],
+        ),
       ),
     );
   }
@@ -309,7 +280,9 @@ class _PendingSharePanel extends StatelessWidget {
 
 class _QueueActions extends StatelessWidget {
   const _QueueActions({
-    required this.itemCount,
+    required this.queuedCount,
+    required this.inProgressCount,
+    required this.failedCount,
     required this.isProcessing,
     required this.isLoading,
     required this.isAuthenticated,
@@ -318,7 +291,9 @@ class _QueueActions extends StatelessWidget {
     required this.onClear,
   });
 
-  final int itemCount;
+  final int queuedCount;
+  final int inProgressCount;
+  final int failedCount;
   final bool isProcessing;
   final bool isLoading;
   final bool isAuthenticated;
@@ -328,44 +303,91 @@ class _QueueActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: OutlinedButton.icon(
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '$queuedCount queued'
+              '${inProgressCount > 0 ? ' · $inProgressCount active' : ''}'
+              '${failedCount > 0 ? ' · $failedCount failed' : ''}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Refresh queue',
             onPressed: isLoading || !isAuthenticated ? null : onRefresh,
             icon: const Icon(Icons.refresh),
-            label: Text('$itemCount queued'),
           ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: FilledButton.icon(
-            onPressed: !isAuthenticated || itemCount == 0 || isProcessing
+          IconButton.filled(
+            tooltip: isProcessing ? 'Processing' : 'Start downloads',
+            onPressed: !isAuthenticated || queuedCount == 0 || isProcessing
                 ? null
                 : onStart,
             icon: isProcessing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
+                ? const SizedBox.square(
+                    dimension: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Icon(Icons.play_arrow),
-            label: Text(isProcessing ? 'Processing' : 'Start'),
+          ),
+          const SizedBox(width: 4),
+          IconButton.outlined(
+            tooltip: 'Clear queued links',
+            onPressed: !isAuthenticated || queuedCount == 0 ? null : onClear,
+            icon: const Icon(Icons.clear_all),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QueueSection extends StatelessWidget {
+  const _QueueSection({
+    required this.title,
+    required this.items,
+    required this.emptyText,
+  });
+
+  final String title;
+  final List<DownloadQueueItem> items;
+  final String emptyText;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+          child: Text(
+            title,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: scheme.primary,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
-        const SizedBox(width: 8),
-        IconButton.outlined(
-          tooltip: 'Clear queue',
-          onPressed: !isAuthenticated || itemCount == 0 ? null : onClear,
-          icon: const Icon(Icons.clear_all),
-        ),
+        if (items.isEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Text(emptyText),
+          )
+        else
+          ...items.map((item) => _QueueItemRow(item: item)),
       ],
     );
   }
 }
 
-class _QueueItemTile extends StatelessWidget {
-  const _QueueItemTile({required this.item});
+class _QueueItemRow extends StatelessWidget {
+  const _QueueItemRow({required this.item});
 
   final DownloadQueueItem item;
 
@@ -374,92 +396,147 @@ class _QueueItemTile extends StatelessWidget {
     final appState = context.read<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final statusColor = _statusColor(scheme, item.status);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                color: statusColor.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(8),
+    final isFailed = item.status == DownloadStatus.error;
+    final isPending = item.status == DownloadStatus.pending;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 7, 8, 7),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(_statusIcon(item.status), color: statusColor),
               ),
-              child: Icon(_statusIcon(item.status), color: statusColor),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.title ?? item.url,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleSmall,
-                  ),
-                  if (item.title != null) ...[
-                    const SizedBox(height: 2),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      item.url,
-                      maxLines: 1,
+                      item.title ?? item.url,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        color: isFailed ? scheme.error : null,
+                      ),
                     ),
+                    if (item.artist != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        item.artist!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 4),
+                    Text(
+                      _statusText(item),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: statusColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (item.status == DownloadStatus.downloading &&
+                        item.percentage != null) ...[
+                      const SizedBox(height: 8),
+                      LinearProgressIndicator(
+                        value: (item.percentage! / 100).clamp(0.0, 1.0),
+                      ),
+                    ],
+                    if (item.title != null && !isFailed) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        item.url,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
                   ],
-                  const SizedBox(height: 6),
-                  Text(
-                    _statusText(item),
-                    style: TextStyle(
-                      color: statusColor,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  if (item.status == DownloadStatus.downloading &&
-                      item.percentage != null) ...[
-                    const SizedBox(height: 8),
-                    LinearProgressIndicator(
-                      value: (item.percentage! / 100).clamp(0.0, 1.0),
-                    ),
-                  ],
-                ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Remove from queue',
-              icon: const Icon(Icons.delete_outline),
-              onPressed: () => appState.removeUrlFromQueue(item.url),
-            ),
-          ],
+              if (isFailed) ...[
+                IconButton(
+                  tooltip: 'Retry',
+                  onPressed: () => appState.retryFailedDownload(item),
+                  icon: const Icon(Icons.refresh),
+                ),
+                IconButton(
+                  tooltip: 'Dismiss failed item',
+                  onPressed: () => appState.dismissLocalQueueItem(item.url),
+                  icon: const Icon(Icons.close),
+                ),
+              ] else if (isPending)
+                IconButton(
+                  tooltip: 'Remove from queue',
+                  icon: const Icon(Icons.delete_outline),
+                  onPressed: () => appState.removeUrlFromQueue(item.url),
+                ),
+            ],
+          ),
         ),
-      ),
+        Divider(height: 1, indent: 72, color: scheme.outlineVariant),
+      ],
     );
   }
 
   String _statusText(DownloadQueueItem item) {
     switch (item.status) {
       case DownloadStatus.pending:
-        return 'Pending';
+        return 'Waiting for download';
       case DownloadStatus.downloading:
         final percentage = item.percentage;
-        return percentage == null
-            ? 'Downloading...'
+        final bytes = _bytesText(item);
+        final progress = percentage == null
+            ? 'Downloading'
             : 'Downloading ${percentage.toStringAsFixed(1)}%';
+        return bytes == null ? progress : '$progress · $bytes';
       case DownloadStatus.processing:
-        return 'Processing...';
+        return 'Processing';
       case DownloadStatus.completed:
         return 'Completed';
       case DownloadStatus.error:
-        return item.error == null ? 'Error' : 'Error: ${item.error}';
+        return item.error == null ? 'Failed to download' : item.error!;
     }
+  }
+
+  String? _bytesText(DownloadQueueItem item) {
+    final downloaded = item.downloadedBytes;
+    final total = item.totalBytes;
+    if (downloaded == null || total == null || total <= 0) {
+      return null;
+    }
+    return '${_formatBytes(downloaded)} of ${_formatBytes(total)}';
+  }
+
+  String _formatBytes(int value) {
+    final mb = value / (1024 * 1024);
+    if (mb >= 1) {
+      return '${mb.toStringAsFixed(1)} MB';
+    }
+    final kb = value / 1024;
+    return '${kb.toStringAsFixed(0)} KB';
   }
 
   IconData _statusIcon(DownloadStatus status) {
     switch (status) {
       case DownloadStatus.pending:
-        return Icons.schedule;
+        return Icons.drag_handle;
       case DownloadStatus.downloading:
         return Icons.downloading;
       case DownloadStatus.processing:
@@ -496,7 +573,7 @@ class _EmptyQueue extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 48),
+      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
       child: Column(
         children: [
           Icon(

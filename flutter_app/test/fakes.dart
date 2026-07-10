@@ -17,6 +17,7 @@ class FakeSettingsService extends SettingsService {
 
   AppSettings settings;
   List<String> pendingShareUrls;
+  String? dismissedConnectionNoticeKey;
 
   @override
   Future<AppSettings> load() async => settings;
@@ -36,6 +37,15 @@ class FakeSettingsService extends SettingsService {
   }
 
   @override
+  Future<String?> loadDismissedConnectionNoticeKey() async =>
+      dismissedConnectionNoticeKey;
+
+  @override
+  Future<void> saveDismissedConnectionNoticeKey(String? key) async {
+    dismissedConnectionNoticeKey = key;
+  }
+
+  @override
   Future<void> clearSession() async {
     settings = settings.copyWith(userId: '', sessionCookie: '');
   }
@@ -48,6 +58,7 @@ class FakeApiService extends ApiService {
   Object? addError;
   Object? deleteError;
   Object? redownloadError;
+  int fetchSongsCalls = 0;
   List<Song> songs = const [];
   List<String> queue = [];
   List<Song> redownloadedSongs = [];
@@ -83,6 +94,7 @@ class FakeApiService extends ApiService {
     required String userId,
     required String cookieHeader,
   }) async {
+    fetchSongsCalls++;
     return songs;
   }
 

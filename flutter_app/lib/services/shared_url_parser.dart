@@ -25,6 +25,26 @@ class SharedUrlParser {
     return urls;
   }
 
+  static String queueKeyFor(String url) {
+    final value = url.trim();
+    final uri = Uri.tryParse(value);
+    if (uri == null || !_isYoutubeHost(uri.host)) {
+      return value;
+    }
+
+    final videoId = _videoIdFor(uri);
+    if (videoId != null && videoId.isNotEmpty) {
+      return 'youtube:video:$videoId';
+    }
+
+    final playlistId = uri.queryParameters['list'];
+    if (playlistId != null && playlistId.isNotEmpty) {
+      return 'youtube:playlist:$playlistId';
+    }
+
+    return uri.replace(fragment: '').toString();
+  }
+
   static String _trimUrl(String url) {
     var value = url.trim();
     while (value.isNotEmpty && _hasTrailingPunctuation(value)) {
@@ -64,5 +84,26 @@ class SharedUrlParser {
         value.endsWith('.youtube.com') ||
         value == 'youtube-nocookie.com' ||
         value.endsWith('.youtube-nocookie.com');
+  }
+
+  static String? _videoIdFor(Uri uri) {
+    final host = uri.host.toLowerCase();
+    if (host == 'youtu.be') {
+      return uri.pathSegments.isEmpty ? null : uri.pathSegments.first;
+    }
+
+    final watchId = uri.queryParameters['v'];
+    if (watchId != null && watchId.isNotEmpty) {
+      return watchId;
+    }
+
+    if (uri.pathSegments.length >= 2) {
+      final section = uri.pathSegments.first.toLowerCase();
+      if (section == 'shorts' || section == 'embed' || section == 'live') {
+        return uri.pathSegments[1];
+      }
+    }
+
+    return null;
   }
 }

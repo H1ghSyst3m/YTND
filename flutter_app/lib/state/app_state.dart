@@ -3,16 +3,20 @@ import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/app_settings.dart';
 import '../models/download_queue_item.dart';
 import '../models/song.dart';
+import '../models/sync_summary.dart';
 import '../services/api_service.dart';
 import '../services/background_sync_service.dart';
+import '../services/cover_cache_service.dart';
 import '../services/settings_service.dart';
 import '../services/share_intent_service.dart';
+import '../services/shared_url_parser.dart';
 import '../services/sync_service.dart';
 import '../services/websocket_service.dart';
 
@@ -36,6 +40,7 @@ class AppState extends ChangeNotifier {
     required BackgroundSyncService backgroundSyncService,
     required WebsocketService websocketService,
     required ShareIntentService shareIntentService,
+    CoverCacheService? coverCacheService,
   }) : this._(
          settingsService: settingsService,
          apiService: apiService,
@@ -43,6 +48,7 @@ class AppState extends ChangeNotifier {
          backgroundSyncService: backgroundSyncService,
          websocketService: websocketService,
          shareIntentService: shareIntentService,
+         coverCacheService: coverCacheService ?? CoverCacheService.instance,
        );
 
   AppState._({
@@ -52,6 +58,7 @@ class AppState extends ChangeNotifier {
     required this._backgroundSyncService,
     required this._websocketService,
     required this._shareIntentService,
+    required this._coverCacheService,
   });
 
   final SettingsService _settingsService;
@@ -60,11 +67,14 @@ class AppState extends ChangeNotifier {
   final BackgroundSyncService _backgroundSyncService;
   final WebsocketService _websocketService;
   final ShareIntentService _shareIntentService;
+  final CoverCacheService _coverCacheService;
 
   AppSettings _settings = const AppSettings();
   List<Song> _songs = const [];
+  Map<String, bool> _downloadedSongKeys = const {};
   List<DownloadQueueItem> _downloadQueue = const [];
   List<String> _pendingShareUrls = const [];
+  SyncSummary? _latestSyncSummary;
   StreamSubscription<WsEvent>? _wsSubscription;
   StreamSubscription<List<String>>? _shareSubscription;
 
@@ -81,12 +91,28 @@ class AppState extends ChangeNotifier {
   ConnectionStatus _connectionStatus = ConnectionStatus.setupRequired;
   String _statusMessage = '';
   String? _lastErrorMessage;
+  String? _dismissedConnectionNoticeKey;
+  int _connectionNoticeVersion = 0;
   int _queueFocusVersion = 0;
 
   AppSettings get settings => _settings;
   List<Song> get songs => _songs;
   List<DownloadQueueItem> get downloadQueue => _downloadQueue;
+  List<DownloadQueueItem> get inProgressQueue => _downloadQueue
+      .where(
+        (item) =>
+            item.status == DownloadStatus.downloading ||
+            item.status == DownloadStatus.processing,
+      )
+      .toList(growable: false);
+  List<DownloadQueueItem> get queuedQueue => _downloadQueue
+      .where((item) => item.status == DownloadStatus.pending)
+      .toList(growable: false);
+  List<DownloadQueueItem> get failedQueue => _downloadQueue
+      .where((item) => item.status == DownloadStatus.error)
+      .toList(growable: false);
   List<String> get pendingShareUrls => _pendingShareUrls;
+  SyncSummary? get latestSyncSummary => _latestSyncSummary;
   bool get initialized => _initialized;
   bool get isAuthenticated => _isAuthenticated;
   bool get isAuthenticating => _isAuthenticating;
@@ -105,8 +131,25 @@ class AppState extends ChangeNotifier {
   bool get hasSavedSession =>
       _settings.userId.isNotEmpty && _settings.sessionCookie.isNotEmpty;
 
+  bool isSongAvailable(Song song) => song.fileAvailable;
+
+  bool isSongDownloaded(Song song) =>
+      isSongAvailable(song) &&
+      (_downloadedSongKeys[_songStatusKey(song)] ?? false);
+
   String? get pendingShareUrl =>
       _pendingShareUrls.isEmpty ? null : _pendingShareUrls.first;
+
+  String get connectionNoticeKey {
+    final error = _lastErrorMessage;
+    final errorPart = error == null || error.isEmpty
+        ? ''
+        : ':error:$_connectionNoticeVersion:$error';
+    return 'connection:${_connectionStatus.name}$errorPart';
+  }
+
+  bool get shouldShowConnectionNotice =>
+      _dismissedConnectionNoticeKey != connectionNoticeKey;
 
   String get connectionTitle {
     switch (_connectionStatus) {
@@ -147,6 +190,19 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Future<void> dismissConnectionNotice() async {
+    _dismissedConnectionNoticeKey = connectionNoticeKey;
+    await _settingsService.saveDismissedConnectionNoticeKey(
+      _dismissedConnectionNoticeKey,
+    );
+    notifyListeners();
+  }
+
+  void clearLatestSyncSummary() {
+    _latestSyncSummary = null;
+    notifyListeners();
+  }
+
   String? consumePendingShareUrl() {
     if (_pendingShareUrls.isEmpty) {
       return null;
@@ -162,6 +218,8 @@ class AppState extends ChangeNotifier {
     try {
       _settings = await _settingsService.load();
       _pendingShareUrls = await _settingsService.loadPendingShareUrls();
+      _dismissedConnectionNoticeKey =
+          await _settingsService.loadDismissedConnectionNoticeKey();
 
       if (_settings.storagePath == AppSettings.defaultStoragePath) {
         await _ensureDefaultStoragePathExists();
@@ -178,6 +236,7 @@ class AppState extends ChangeNotifier {
       debugPrint('App initialization failed: $e\n$st');
       _lastErrorMessage = _messageFor(e, 'YTND could not finish startup.');
       _statusMessage = _lastErrorMessage!;
+      _markFreshConnectionNotice();
       _connectionStatus = hasServerProfile
           ? ConnectionStatus.unreachable
           : ConnectionStatus.setupRequired;
@@ -213,6 +272,7 @@ class AppState extends ChangeNotifier {
       if (accountChanged) {
         _isAuthenticated = false;
         _songs = const [];
+        _downloadedSongKeys = const {};
         _downloadQueue = const [];
         _isQueueProcessing = false;
         await _disconnectWebsocket();
@@ -261,6 +321,7 @@ class AppState extends ChangeNotifier {
       );
       _lastErrorMessage = _messageFor(e, 'Could not sign in.');
       _statusMessage = _lastErrorMessage!;
+      _markFreshConnectionNotice();
       notifyListeners();
       rethrow;
     } finally {
@@ -272,6 +333,7 @@ class AppState extends ChangeNotifier {
   Future<void> logout() async {
     _isAuthenticated = false;
     _songs = const [];
+    _downloadedSongKeys = const {};
     _downloadQueue = const [];
     _statusMessage = 'Signed out';
     _lastErrorMessage = null;
@@ -310,6 +372,7 @@ class AppState extends ChangeNotifier {
         next = next.copyWith(userId: '', sessionCookie: '');
         _isAuthenticated = false;
         _songs = const [];
+        _downloadedSongKeys = const {};
         _downloadQueue = const [];
         _isQueueProcessing = false;
         await _disconnectWebsocket();
@@ -319,6 +382,9 @@ class AppState extends ChangeNotifier {
 
       _settings = next;
       await _settingsService.save(_settings);
+      if (_songs.isNotEmpty) {
+        _downloadedSongKeys = await _resolveDownloadedSongs(_songs);
+      }
       if (_isAuthenticated) {
         await _configureBackgroundSync();
         await _connectWebsocket();
@@ -333,8 +399,48 @@ class AppState extends ChangeNotifier {
       debugPrint('Saving settings failed: $e\n$st');
       _lastErrorMessage = _messageFor(e, 'Could not save settings.');
       _statusMessage = _lastErrorMessage!;
+      _markFreshConnectionNotice();
       notifyListeners();
       rethrow;
+    } finally {
+      _isSavingSettings = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> updateSyncPreferences({
+    int? syncIntervalHours,
+    bool? syncWifiOnly,
+    bool? syncOnStartup,
+  }) async {
+    if (_isSavingSettings) {
+      return false;
+    }
+
+    _isSavingSettings = true;
+    _lastErrorMessage = null;
+    notifyListeners();
+
+    try {
+      _settings = _settings.copyWith(
+        syncIntervalHours: syncIntervalHours,
+        syncWifiOnly: syncWifiOnly,
+        syncOnStartup: syncOnStartup,
+      );
+      await _settingsService.save(_settings);
+      if (_isAuthenticated) {
+        await _configureBackgroundSync();
+      }
+      _statusMessage = 'Settings saved';
+      notifyListeners();
+      return true;
+    } catch (e, st) {
+      debugPrint('Saving sync preferences failed: $e\n$st');
+      _lastErrorMessage = _messageFor(e, 'Could not save sync settings.');
+      _statusMessage = _lastErrorMessage!;
+      _markFreshConnectionNotice();
+      notifyListeners();
+      return false;
     } finally {
       _isSavingSettings = false;
       notifyListeners();
@@ -389,6 +495,8 @@ class AppState extends ChangeNotifier {
         userId: _settings.userId,
         cookieHeader: _settings.sessionCookie,
       );
+      _downloadedSongKeys = await _resolveDownloadedSongs(_songs);
+      _prefetchSongCovers(_songs);
       _connectionStatus = ConnectionStatus.connected;
       _statusMessage = 'Library updated';
       return true;
@@ -419,20 +527,7 @@ class AppState extends ChangeNotifier {
         userId: _settings.userId,
         cookieHeader: _settings.sessionCookie,
       );
-      final serverUrlSet = urls.toSet();
-      final inFlight = _downloadQueue
-          .where(
-            (item) =>
-                (item.status == DownloadStatus.downloading ||
-                    item.status == DownloadStatus.processing) &&
-                !serverUrlSet.contains(item.url),
-          )
-          .toList();
-      final currentByUrl = {for (final item in _downloadQueue) item.url: item};
-      _downloadQueue = [
-        ...inFlight,
-        ...urls.map((url) => currentByUrl[url] ?? DownloadQueueItem(url: url)),
-      ];
+      _downloadQueue = _mergeServerQueue(urls);
       _connectionStatus = ConnectionStatus.connected;
       return true;
     } catch (e, st) {
@@ -460,6 +555,15 @@ class AppState extends ChangeNotifier {
       if (!connected) {
         _statusMessage = 'Sync skipped: no network access.';
         _connectionStatus = ConnectionStatus.unreachable;
+        _latestSyncSummary = SyncSummary(
+          remoteCount: 0,
+          downloaded: 0,
+          deleted: 0,
+          completedAt: DateTime.now(),
+          message: _statusMessage,
+          success: false,
+        );
+        _markFreshConnectionNotice();
         notifyListeners();
         return false;
       }
@@ -467,6 +571,14 @@ class AppState extends ChangeNotifier {
       final permissionGranted = await _requestStoragePermissions();
       if (!permissionGranted) {
         _statusMessage = 'Sync skipped: storage permission denied.';
+        _latestSyncSummary = SyncSummary(
+          remoteCount: 0,
+          downloaded: 0,
+          deleted: 0,
+          completedAt: DateTime.now(),
+          message: _statusMessage,
+          success: false,
+        );
         return false;
       }
       final result = await _syncService.sync(
@@ -477,11 +589,25 @@ class AppState extends ChangeNotifier {
       );
       await refreshSongs();
       _connectionStatus = ConnectionStatus.connected;
-      _statusMessage =
-          'Sync finished: ${result.remoteCount} server songs, ${result.downloaded} downloaded, ${result.deleted} removed locally.';
+      _latestSyncSummary = SyncSummary(
+        remoteCount: result.remoteCount,
+        downloaded: result.downloaded,
+        deleted: result.deleted,
+        completedAt: DateTime.now(),
+        message: 'Sync finished',
+      );
+      _statusMessage = 'Sync finished';
       return true;
     } catch (e, st) {
       debugPrint('Sync failed: $e\n$st');
+      _latestSyncSummary = SyncSummary(
+        remoteCount: 0,
+        downloaded: 0,
+        deleted: 0,
+        completedAt: DateTime.now(),
+        message: _messageFor(e, 'Sync failed.'),
+        success: false,
+      );
       await _handleOperationFailure(e, 'Sync failed.');
       return false;
     } finally {
@@ -670,7 +796,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<bool> processQueue() async {
-    if (!_isAuthenticated || _isQueueProcessing || _downloadQueue.isEmpty) {
+    if (!_isAuthenticated || _isQueueProcessing || queuedQueue.isEmpty) {
       return false;
     }
     try {
@@ -696,6 +822,23 @@ class AppState extends ChangeNotifier {
 
   void dismissError() {
     _lastErrorMessage = null;
+    notifyListeners();
+  }
+
+  Future<bool> retryFailedDownload(DownloadQueueItem item) async {
+    final result = await addUrlsToQueue([item.url]);
+    if (result == QueueAddResult.failed) {
+      return false;
+    }
+    dismissLocalQueueItem(item.url);
+    return true;
+  }
+
+  void dismissLocalQueueItem(String url) {
+    final key = _queueKeyFor(url);
+    _downloadQueue = _downloadQueue
+        .where((item) => _queueKeyFor(item.url) != key)
+        .toList(growable: false);
     notifyListeners();
   }
 
@@ -734,6 +877,7 @@ class AppState extends ChangeNotifier {
       await _configureBackgroundSync();
       await _connectWebsocket();
       await retryPendingShareUrls();
+      await _syncOnStartupIfNeeded();
     } catch (e, st) {
       debugPrint('Session restore failed: $e\n$st');
       if (e is ApiException && e.isAuthFailure) {
@@ -746,6 +890,7 @@ class AppState extends ChangeNotifier {
       _connectionStatus = _statusForError(e);
       _lastErrorMessage = _messageFor(e, 'Could not reach your YTND server.');
       _statusMessage = _lastErrorMessage!;
+      _markFreshConnectionNotice();
       await _backgroundSyncService.cancel();
     }
   }
@@ -753,6 +898,94 @@ class AppState extends ChangeNotifier {
   Future<void> _loadInitialData() async {
     await refreshSongs();
     await refreshQueue();
+  }
+
+  Future<Map<String, bool>> _resolveDownloadedSongs(List<Song> songs) async {
+    final statuses = <String, bool>{};
+    for (final song in songs) {
+      statuses[_songStatusKey(song)] =
+          song.fileAvailable && await _isDownloadedOnDevice(song);
+    }
+    return statuses;
+  }
+
+  Future<bool> _isDownloadedOnDevice(Song song) async {
+    final localFile = _safeLocalSongFile(song);
+    return localFile != null && await localFile.exists();
+  }
+
+  File? _safeLocalSongFile(Song song) {
+    final filename = song.filename;
+    if (filename == null || filename.trim().isEmpty) {
+      return null;
+    }
+    final segments = filename.split(RegExp(r'[\\/]'));
+    if (p.isAbsolute(filename) || segments.contains('..')) {
+      return null;
+    }
+
+    final storageRoot = p.normalize(
+      Directory(_settings.storagePath).absolute.path,
+    );
+    final resolved = p.normalize(p.join(storageRoot, filename));
+    if (!p.isWithin(storageRoot, resolved)) {
+      return null;
+    }
+    return File(resolved);
+  }
+
+  String _songStatusKey(Song song) {
+    final id = song.id;
+    if (id != null && id.isNotEmpty) {
+      return 'id:$id';
+    }
+    final filename = song.filename;
+    if (filename != null && filename.isNotEmpty) {
+      return 'file:$filename';
+    }
+    return 'meta:${song.title}|${song.artist}';
+  }
+
+  void _prefetchSongCovers(List<Song> songs) {
+    if (_settings.sessionCookie.isEmpty) {
+      return;
+    }
+    final urls = songs
+        .map(coverUrlFor)
+        .whereType<String>()
+        .toSet()
+        .toList(growable: false);
+    if (urls.isEmpty) {
+      return;
+    }
+    unawaited(
+      _coverCacheService.prefetchAll(
+        coverUrls: urls,
+        cookieHeader: _settings.sessionCookie,
+      ),
+    );
+  }
+
+  Future<void> _syncOnStartupIfNeeded() async {
+    if (!_settings.syncOnStartup || !_isAuthenticated || _isSyncing) {
+      return;
+    }
+
+    if (_settings.syncWifiOnly && !await _hasNetwork(wifiOnly: true)) {
+      _statusMessage = 'Startup sync skipped: WiFi required.';
+      _latestSyncSummary = SyncSummary(
+        remoteCount: 0,
+        downloaded: 0,
+        deleted: 0,
+        completedAt: DateTime.now(),
+        message: _statusMessage,
+        success: false,
+      );
+      notifyListeners();
+      return;
+    }
+
+    await syncNow();
   }
 
   Future<void> _receiveSharedUrls(List<String> urls) async {
@@ -801,6 +1034,7 @@ class AppState extends ChangeNotifier {
     final message = _messageFor(error, fallbackMessage);
     _lastErrorMessage = message;
     _statusMessage = message;
+    _markFreshConnectionNotice();
     if (error is ApiException) {
       switch (error.kind) {
         case ApiErrorKind.unauthorized:
@@ -829,6 +1063,7 @@ class AppState extends ChangeNotifier {
     _connectionStatus = ConnectionStatus.unauthorized;
     _lastErrorMessage = message;
     _statusMessage = message;
+    _markFreshConnectionNotice();
     _settings = _settings.copyWith(userId: '', sessionCookie: '');
     await _settingsService.save(_settings);
     await _settingsService.clearSession();
@@ -928,8 +1163,9 @@ class AppState extends ChangeNotifier {
         if (url == null || url.isEmpty) {
           return;
         }
+        final key = _queueKeyFor(url);
         final existingIndex = _downloadQueue.indexWhere(
-          (item) => item.url == url,
+          (item) => _queueKeyFor(item.url) == key,
         );
         final index = existingIndex >= 0
             ? existingIndex
@@ -942,6 +1178,11 @@ class AppState extends ChangeNotifier {
         final error = status == DownloadStatus.error
             ? _friendlyDownloadError(data['error'])
             : null;
+        if (error != null) {
+          _lastErrorMessage = error;
+          _statusMessage = error;
+          _markFreshConnectionNotice();
+        }
         final updated = _downloadQueue[index].copyWith(
           status: status,
           title: data['title']?.toString(),
@@ -976,6 +1217,7 @@ class AppState extends ChangeNotifier {
         _isQueueProcessing = false;
         _lastErrorMessage = _friendlyDownloadError(event.data['error']);
         _statusMessage = _lastErrorMessage!;
+        _markFreshConnectionNotice();
         notifyListeners();
         break;
       case 'queue_updated':
@@ -1028,9 +1270,48 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<bool> _hasNetwork() async {
+  List<DownloadQueueItem> _mergeServerQueue(List<String> urls) {
+    final currentByKey = {
+      for (final item in _downloadQueue) _queueKeyFor(item.url): item,
+    };
+    final seenKeys = <String>{};
+    final merged = <DownloadQueueItem>[];
+
+    for (final url in urls) {
+      final key = _queueKeyFor(url);
+      if (!seenKeys.add(key)) {
+        continue;
+      }
+      merged.add(currentByKey[key] ?? DownloadQueueItem(url: url));
+    }
+
+    for (final item in _downloadQueue) {
+      final key = _queueKeyFor(item.url);
+      if (seenKeys.contains(key) || item.status == DownloadStatus.pending) {
+        continue;
+      }
+      seenKeys.add(key);
+      merged.add(item);
+    }
+
+    return merged;
+  }
+
+  String _queueKeyFor(String url) => SharedUrlParser.queueKeyFor(url);
+
+  void _markFreshConnectionNotice() {
+    _connectionNoticeVersion++;
+  }
+
+  Future<bool> _hasNetwork({bool wifiOnly = false}) async {
     final results = await Connectivity().checkConnectivity();
-    return !results.contains(ConnectivityResult.none);
+    if (results.contains(ConnectivityResult.none)) {
+      return false;
+    }
+    if (!wifiOnly) {
+      return true;
+    }
+    return results.contains(ConnectivityResult.wifi);
   }
 
   Future<bool> _requestStoragePermissions() async {

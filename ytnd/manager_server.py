@@ -527,6 +527,24 @@ def _find_audio_file(user_id: str, title: str, artist: str) -> Optional[Path]:
             return matches[0]
     return None
 
+def _file_mtime_iso(path: Path) -> Optional[str]:
+    try:
+        return (
+            datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+    except OSError:
+        return None
+
+def _song_downloaded_at(song: dict, audio_file: Optional[Path]) -> Optional[str]:
+    value = song.get("downloaded_at")
+    if isinstance(value, str) and value.strip():
+        return value
+    if audio_file:
+        return _file_mtime_iso(audio_file)
+    return None
+
 def _write_song_list(user_id: str, items: List[dict]) -> None:
     try:
         user_id = sanitize_user_id(user_id)
@@ -1026,14 +1044,20 @@ def api_songs(
         raise HTTPException(status_code=500, detail="Failed to load song list")
     
     enriched = []
+    backfilled_download_dates = False
     for s in songs:
         title = s.get("title") or ""
         artist = s.get("artist") or ""
         try:
             f_audio = _find_audio_file(user_id, title, artist)
             f_cover = _find_cover_file(user_id, s)
+            downloaded_at = _song_downloaded_at(s, f_audio)
+            if downloaded_at and not s.get("downloaded_at"):
+                s["downloaded_at"] = downloaded_at
+                backfilled_download_dates = True
             enriched.append({
                 **s,
+                "downloaded_at": downloaded_at,
                 "file_available": bool(f_audio),
                 "filename": f_audio.name if f_audio else None,
                 "cover_available": bool(f_cover),
@@ -1043,11 +1067,17 @@ def api_songs(
             logger.warning("Error processing song %s - %s: %s", title, artist, e)
             enriched.append({
                 **s,
+                "downloaded_at": _song_downloaded_at(s, None),
                 "file_available": False,
                 "filename": None,
                 "cover_available": False,
                 "cover": None
             })
+    if backfilled_download_dates:
+        try:
+            _write_song_list(user_id, songs)
+        except Exception as e:
+            logger.warning("Failed to backfill downloaded_at for user %s: %s", user_id, e)
     return {"songs": enriched}
 
 @app.get("/api/cover")

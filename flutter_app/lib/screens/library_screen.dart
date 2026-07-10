@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/song.dart';
+import '../services/cover_cache_service.dart';
 import '../state/app_state.dart';
+
+enum _LibrarySort { newest, title, artist, localStatus }
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key, this.onOpenSettings});
@@ -16,6 +19,7 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _query = '';
+  _LibrarySort _sort = _LibrarySort.newest;
 
   @override
   void initState() {
@@ -96,13 +100,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
           return _LockedState(onOpenSettings: widget.onOpenSettings);
         }
 
-        final songs = _filterSongs(appState.songs);
+        final songs = _sortSongs(_filterSongs(appState.songs), appState);
         final headerItems = _headerItems(appState, songs);
         return RefreshIndicator(
           onRefresh: appState.refreshSongs,
           child: ListView.builder(
             physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+            padding: const EdgeInsets.fromLTRB(0, 10, 0, 96),
             itemCount: headerItems.length + (songs.isEmpty ? 1 : songs.length),
             itemBuilder: (context, index) {
               if (index < headerItems.length) {
@@ -114,15 +118,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
               }
 
               final song = songs[index - headerItems.length];
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: _SongTile(
-                  song: song,
-                  coverUrl: appState.coverUrlFor(song),
-                  cookieHeader: appState.settings.sessionCookie,
-                  onDelete: () => _confirmDelete(context, song),
-                  onRedownload: () => _redownload(context, song),
-                ),
+              return _SongRow(
+                song: song,
+                isAvailable: appState.isSongAvailable(song),
+                isDownloaded: appState.isSongDownloaded(song),
+                coverUrl: appState.coverUrlFor(song),
+                cookieHeader: appState.settings.sessionCookie,
+                onDelete: () => _confirmDelete(context, song),
+                onRedownload: () => _redownload(context, song),
               );
             },
           ),
@@ -133,34 +136,42 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   List<Widget> _headerItems(AppState appState, List<Song> songs) {
     return [
-      _LibraryHeader(
+      _LibrarySummary(
         songCount: appState.songs.length,
         visibleCount: songs.length,
-        isSyncing: appState.isSyncing,
         isLoading: appState.isLibraryLoading,
-        onRefresh: appState.refreshSongs,
-        onSync: appState.syncNow,
       ),
-      const SizedBox(height: 14),
-      TextField(
-        controller: _searchController,
-        textInputAction: TextInputAction.search,
-        decoration: InputDecoration(
-          prefixIcon: const Icon(Icons.search),
-          suffixIcon: _query.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: 'Clear search',
-                  onPressed: _searchController.clear,
-                  icon: const Icon(Icons.close),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _searchController,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: _searchController.clear,
+                          icon: const Icon(Icons.close),
+                        ),
+                  labelText: 'Search songs',
+                  hintText: 'Title or artist',
                 ),
-          labelText: 'Search library',
-          hintText: 'Title or artist',
+              ),
+            ),
+            const SizedBox(width: 10),
+            _SortMenu(
+              sort: _sort,
+              onChanged: (value) => setState(() => _sort = value),
+            ),
+          ],
         ),
       ),
-      const SizedBox(height: 16),
       if (appState.isLibraryLoading) const LinearProgressIndicator(),
-      if (appState.isLibraryLoading) const SizedBox(height: 12),
       if (appState.lastErrorMessage != null)
         _InlineMessage(
           icon: Icons.warning_amber_outlined,
@@ -174,7 +185,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   List<Song> _filterSongs(List<Song> songs) {
     if (_query.isEmpty) {
-      return songs;
+      return List<Song>.of(songs);
     }
     return songs
         .where((song) {
@@ -184,111 +195,158 @@ class _LibraryScreenState extends State<LibraryScreen> {
         })
         .toList(growable: false);
   }
+
+  List<Song> _sortSongs(List<Song> songs, AppState appState) {
+    final sorted = List<Song>.of(songs);
+    sorted.sort((a, b) {
+      switch (_sort) {
+        case _LibrarySort.newest:
+          return _compareNewest(a, b);
+        case _LibrarySort.title:
+          return _compareText(a.title, b.title);
+        case _LibrarySort.artist:
+          return _compareText(a.artist, b.artist);
+        case _LibrarySort.localStatus:
+          final downloaded =
+              (appState.isSongDownloaded(b) ? 1 : 0) -
+              (appState.isSongDownloaded(a) ? 1 : 0);
+          if (downloaded != 0) {
+            return downloaded;
+          }
+          final available =
+              (appState.isSongAvailable(b) ? 1 : 0) -
+              (appState.isSongAvailable(a) ? 1 : 0);
+          return available == 0 ? _compareText(a.title, b.title) : available;
+      }
+    });
+    return sorted;
+  }
+
+  int _compareNewest(Song a, Song b) {
+    final aDate = a.parsedDownloadedAt;
+    final bDate = b.parsedDownloadedAt;
+    if (aDate == null && bDate == null) {
+      return _compareText(a.title, b.title);
+    }
+    if (aDate == null) {
+      return 1;
+    }
+    if (bDate == null) {
+      return -1;
+    }
+    final date = bDate.compareTo(aDate);
+    return date == 0 ? _compareText(a.title, b.title) : date;
+  }
+
+  int _compareText(String a, String b) =>
+      a.toLowerCase().compareTo(b.toLowerCase());
 }
 
-class _LibraryHeader extends StatelessWidget {
-  const _LibraryHeader({
+class _LibrarySummary extends StatelessWidget {
+  const _LibrarySummary({
     required this.songCount,
     required this.visibleCount,
-    required this.isSyncing,
     required this.isLoading,
-    required this.onRefresh,
-    required this.onSync,
   });
 
   final int songCount;
   final int visibleCount;
-  final bool isSyncing;
   final bool isLoading;
-  final Future<bool> Function() onRefresh;
-  final Future<bool> Function() onSync;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: scheme.surface,
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: scheme.primaryContainer,
-                  borderRadius: BorderRadius.circular(8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  visibleCount == songCount
+                      ? '$songCount songs'
+                      : '$visibleCount of $songCount songs',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
                 ),
-                child: Icon(
-                  Icons.library_music,
-                  color: scheme.onPrimaryContainer,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Your synced library',
-                      style: Theme.of(context).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      visibleCount == songCount
-                          ? '$songCount songs'
-                          : '$visibleCount of $songCount songs',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: isLoading ? null : onRefresh,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Refresh'),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: isSyncing ? null : onSync,
-                  icon: isSyncing
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.sync),
-                  label: Text(isSyncing ? 'Syncing' : 'Sync now'),
-                ),
-              ),
-            ],
-          ),
+          if (isLoading)
+            const SizedBox.square(
+              dimension: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
         ],
       ),
     );
   }
 }
 
-class _SongTile extends StatelessWidget {
-  const _SongTile({
+class _SortMenu extends StatelessWidget {
+  const _SortMenu({required this.sort, required this.onChanged});
+
+  final _LibrarySort sort;
+  final ValueChanged<_LibrarySort> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_LibrarySort>(
+      tooltip: 'Sort songs',
+      initialValue: sort,
+      onSelected: onChanged,
+      itemBuilder: (context) => _LibrarySort.values
+          .map(
+            (value) => PopupMenuItem(
+              value: value,
+              child: Text(_sortLabel(value)),
+            ),
+          )
+          .toList(),
+      child: Container(
+        height: 48,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: Theme.of(context)
+              .colorScheme
+              .surfaceContainerHighest
+              .withValues(alpha: 0.42),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_sortLabel(sort)),
+            const SizedBox(width: 4),
+            const Icon(Icons.expand_more, size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _sortLabel(_LibrarySort value) {
+    switch (value) {
+      case _LibrarySort.newest:
+        return 'Newest';
+      case _LibrarySort.title:
+        return 'Title';
+      case _LibrarySort.artist:
+        return 'Artist';
+      case _LibrarySort.localStatus:
+        return 'Status';
+    }
+  }
+}
+
+class _SongRow extends StatelessWidget {
+  const _SongRow({
     required this.song,
+    required this.isAvailable,
+    required this.isDownloaded,
     required this.coverUrl,
     required this.cookieHeader,
     required this.onDelete,
@@ -296,6 +354,8 @@ class _SongTile extends StatelessWidget {
   });
 
   final Song song;
+  final bool isAvailable;
+  final bool isDownloaded;
   final String? coverUrl;
   final String cookieHeader;
   final VoidCallback onDelete;
@@ -304,119 +364,310 @@ class _SongTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Card(
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        leading: _SongCover(coverUrl: coverUrl, cookieHeader: cookieHeader),
-        title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-        subtitle: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Icon(
-                  song.fileAvailable
-                      ? Icons.offline_pin_outlined
-                      : Icons.hourglass_bottom,
-                  size: 15,
-                  color: song.fileAvailable
-                      ? scheme.secondary
-                      : scheme.tertiary,
+    final statusColor = isDownloaded
+        ? scheme.secondary
+        : isAvailable
+        ? scheme.primary
+        : scheme.tertiary;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 7, 8, 7),
+          child: Row(
+            children: [
+              _SongCover(coverUrl: coverUrl, cookieHeader: cookieHeader),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      song.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      song.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            _dateLabel(song),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        ..._statusWidgets(
+                          context,
+                          scheme,
+                          statusColor: statusColor,
+                          isAvailable: isAvailable,
+                          isDownloaded: isDownloaded,
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 4),
-                Text(
-                  song.fileAvailable
-                      ? 'Available locally'
-                      : 'Processing or missing file',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+              ),
+              Icon(
+                isDownloaded
+                    ? Icons.check_circle_outline
+                    : isAvailable
+                    ? Icons.cloud_download_outlined
+                    : Icons.error_outline,
+                color: statusColor,
+                size: 22,
+              ),
+              PopupMenuButton<String>(
+                tooltip: 'Song actions',
+                onSelected: (value) {
+                  if (value == 'redownload') {
+                    onRedownload();
+                  } else if (value == 'delete') {
+                    onDelete();
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'redownload',
+                    child: ListTile(
+                      leading: Icon(Icons.replay),
+                      title: Text('Redownload'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ],
-        ),
-        trailing: PopupMenuButton<String>(
-          tooltip: 'Song actions',
-          onSelected: (value) {
-            if (value == 'redownload') {
-              onRedownload();
-            } else if (value == 'delete') {
-              onDelete();
-            }
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem(
-              value: 'redownload',
-              child: ListTile(
-                leading: Icon(Icons.replay),
-                title: Text('Redownload'),
-                contentPadding: EdgeInsets.zero,
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: ListTile(
+                      leading: Icon(Icons.delete_outline),
+                      title: Text('Delete'),
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            PopupMenuItem(
-              value: 'delete',
-              child: ListTile(
-                leading: Icon(Icons.delete_outline),
-                title: Text('Delete'),
-                contentPadding: EdgeInsets.zero,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
+        Divider(height: 1, indent: 76, color: scheme.outlineVariant),
+      ],
     );
+  }
+
+  String _dateLabel(Song song) {
+    final date = song.parsedDownloadedAt;
+    if (date == null) {
+      return 'No download date';
+    }
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  List<Widget> _statusWidgets(
+    BuildContext context,
+    ColorScheme scheme, {
+    required Color statusColor,
+    required bool isAvailable,
+    required bool isDownloaded,
+  }) {
+    final labels = <String>[
+      if (isAvailable) 'Available',
+      if (isDownloaded) 'Downloaded',
+      if (!isAvailable && !isDownloaded) 'Missing',
+    ];
+    final textStyle = Theme.of(
+      context,
+    ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant);
+
+    return [
+      for (var i = 0; i < labels.length; i++) ...[
+        if (i > 0) ...[
+          const SizedBox(width: 5),
+          Text('•', style: textStyle),
+          const SizedBox(width: 5),
+        ] else ...[
+          const SizedBox(width: 6),
+          Icon(Icons.circle, size: 5, color: statusColor),
+          const SizedBox(width: 5),
+        ],
+        Text(labels[i], style: textStyle),
+      ],
+    ];
   }
 }
 
-class _SongCover extends StatelessWidget {
+class _SongCover extends StatefulWidget {
   const _SongCover({required this.coverUrl, required this.cookieHeader});
 
   final String? coverUrl;
   final String cookieHeader;
 
-  static const double _size = 56;
+  static const double _size = 48;
+  static final Map<String, ImageProvider> _providerCache = {};
+
+  @override
+  State<_SongCover> createState() => _SongCoverState();
+}
+
+class _SongCoverState extends State<_SongCover> {
+  ImageProvider? _provider;
+  Future<ImageProvider?>? _providerFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveProvider();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SongCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.coverUrl != widget.coverUrl ||
+        oldWidget.cookieHeader != widget.cookieHeader) {
+      _resolveProvider();
+    }
+  }
+
+  void _resolveProvider() {
+    final coverUrl = widget.coverUrl;
+    if (coverUrl == null) {
+      _provider = null;
+      _providerFuture = null;
+      return;
+    }
+
+    final cachedProvider = _SongCover._providerCache[coverUrl];
+    if (cachedProvider != null) {
+      _provider = cachedProvider;
+      _providerFuture = null;
+      return;
+    }
+
+    final memoryFile = CoverCacheService.instance.memoryFileFor(coverUrl);
+    if (memoryFile != null) {
+      final provider = FileImage(memoryFile);
+      _SongCover._providerCache[coverUrl] = provider;
+      _provider = provider;
+      _providerFuture = null;
+      return;
+    }
+
+    _provider = null;
+    _providerFuture = _loadProvider(coverUrl, widget.cookieHeader);
+  }
+
+  Future<ImageProvider?> _loadProvider(
+    String coverUrl,
+    String cookieHeader,
+  ) async {
+    final file = await CoverCacheService.instance.cachedFileFor(
+      coverUrl: coverUrl,
+      cookieHeader: cookieHeader,
+    );
+    if (file == null) {
+      return null;
+    }
+    final provider = FileImage(file);
+    _SongCover._providerCache[coverUrl] = provider;
+    return provider;
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    if (coverUrl == null) {
+    final provider = _provider;
+    if (provider != null) {
+      return _CoverImage(provider: provider);
+    }
+
+    final future = _providerFuture;
+    if (future == null) {
       return _FallbackCover(
         color: scheme.primaryContainer,
         iconColor: scheme.onPrimaryContainer,
       );
     }
 
+    return FutureBuilder<ImageProvider?>(
+      future: future,
+      builder: (context, snapshot) {
+        final provider = snapshot.data;
+        if (provider != null) {
+          return _CoverImage(provider: provider);
+        }
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const _LoadingCover();
+        }
+        return _FallbackCover(
+          color: scheme.surfaceContainerHighest,
+          iconColor: scheme.onSurfaceVariant,
+        );
+      },
+    );
+  }
+}
+
+class _CoverImage extends StatelessWidget {
+  const _CoverImage({required this.provider});
+
+  final ImageProvider provider;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
       child: Image(
-        image: NetworkImage(coverUrl!, headers: {'Cookie': cookieHeader}),
-        width: _size,
-        height: _size,
+        image: provider,
+        width: _SongCover._size,
+        height: _SongCover._size,
         fit: BoxFit.cover,
+        gaplessPlayback: true,
         errorBuilder: (_, _, _) => _FallbackCover(
           color: scheme.surfaceContainerHighest,
           iconColor: scheme.onSurfaceVariant,
         ),
-        loadingBuilder: (_, child, progress) {
-          if (progress == null) return child;
-          return SizedBox(
-            width: _size,
-            height: _size,
-            child: Center(
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                value: progress.expectedTotalBytes == null
-                    ? null
-                    : progress.cumulativeBytesLoaded /
-                          progress.expectedTotalBytes!,
-              ),
-            ),
-          );
-        },
       ),
+    );
+  }
+}
+
+class _LoadingCover extends StatelessWidget {
+  const _LoadingCover();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: _SongCover._size,
+      height: _SongCover._size,
+      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
     );
   }
 }
@@ -436,7 +687,7 @@ class _FallbackCover extends StatelessWidget {
         color: color,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Icon(Icons.music_note, color: iconColor),
+      child: Icon(Icons.music_note, color: iconColor, size: 22),
     );
   }
 }
@@ -466,7 +717,7 @@ class _LockedState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Your library appears here after the server is reachable and you are signed in.',
+              'Songs appear here after the server is reachable and you are signed in.',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -493,7 +744,7 @@ class _EmptyLibrary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 48),
+      padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 24),
       child: Column(
         children: [
           Icon(
@@ -502,7 +753,7 @@ class _EmptyLibrary extends StatelessWidget {
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
           const SizedBox(height: 12),
-          Text(hasQuery ? 'No songs match your search' : 'No songs synced yet'),
+          Text(hasQuery ? 'No songs match your search' : 'No songs yet'),
           const SizedBox(height: 6),
           Text(
             hasQuery
@@ -537,31 +788,32 @@ class _InlineMessage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Material(
+        color: scheme.errorContainer.withValues(alpha: 0.28),
         borderRadius: BorderRadius.circular(8),
-        color: scheme.errorContainer.withValues(alpha: 0.35),
-        border: Border.all(color: scheme.error.withValues(alpha: 0.3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: scheme.error),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.titleSmall),
-                const SizedBox(height: 2),
-                Text(message),
-              ],
-            ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: scheme.error),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: 2),
+                    Text(message),
+                  ],
+                ),
+              ),
+              TextButton(onPressed: onAction, child: Text(actionLabel)),
+            ],
           ),
-          TextButton(onPressed: onAction, child: Text(actionLabel)),
-        ],
+        ),
       ),
     );
   }
