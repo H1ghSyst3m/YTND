@@ -17,12 +17,27 @@ class FakeSettingsService extends SettingsService {
 
   AppSettings settings;
   List<String> pendingShareUrls;
+  String? dismissedConnectionNoticeKey;
+  Object? saveError;
+  Completer<void>? saveCompleter;
+  int saveCalls = 0;
+  final List<AppSettings> savedSettings = [];
 
   @override
   Future<AppSettings> load() async => settings;
 
   @override
   Future<void> save(AppSettings settings) async {
+    saveCalls++;
+    final completer = saveCompleter;
+    if (completer != null) {
+      await completer.future;
+    }
+    final error = saveError;
+    if (error != null) {
+      throw error;
+    }
+    savedSettings.add(settings);
     this.settings = settings;
   }
 
@@ -33,6 +48,15 @@ class FakeSettingsService extends SettingsService {
   @override
   Future<void> savePendingShareUrls(List<String> urls) async {
     pendingShareUrls = List<String>.of(urls);
+  }
+
+  @override
+  Future<String?> loadDismissedConnectionNoticeKey() async =>
+      dismissedConnectionNoticeKey;
+
+  @override
+  Future<void> saveDismissedConnectionNoticeKey(String? key) async {
+    dismissedConnectionNoticeKey = key;
   }
 
   @override
@@ -48,6 +72,7 @@ class FakeApiService extends ApiService {
   Object? addError;
   Object? deleteError;
   Object? redownloadError;
+  int fetchSongsCalls = 0;
   List<Song> songs = const [];
   List<String> queue = [];
   List<Song> redownloadedSongs = [];
@@ -83,6 +108,7 @@ class FakeApiService extends ApiService {
     required String userId,
     required String cookieHeader,
   }) async {
+    fetchSongsCalls++;
     return songs;
   }
 
@@ -181,13 +207,22 @@ class FakeApiService extends ApiService {
 class FakeBackgroundSyncService extends BackgroundSyncService {
   bool configured = false;
   bool cancelled = false;
+  int configureCalls = 0;
+  Object? configureError;
+  AppSettings? configuredSettings;
 
   @override
   Future<void> initialize() async {}
 
   @override
   Future<void> configure(AppSettings settings) async {
+    configureCalls++;
+    final error = configureError;
+    if (error != null) {
+      throw error;
+    }
     configured = true;
+    configuredSettings = settings;
   }
 
   @override

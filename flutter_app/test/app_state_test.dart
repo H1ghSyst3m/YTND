@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:ytnd/models/app_settings.dart';
+import 'package:ytnd/models/download_queue_item.dart';
+import 'package:ytnd/models/song.dart';
 import 'package:ytnd/services/api_service.dart';
 import 'package:ytnd/services/sync_service.dart';
 import 'package:ytnd/services/websocket_service.dart';
@@ -39,6 +43,25 @@ AppState _buildState({
     websocketService: websocketService ?? FakeWebsocketService(),
     shareIntentService: shareIntentService ?? FakeShareIntentService(),
   );
+}
+
+void _mockConnectivity(
+  TestWidgetsFlutterBinding binding,
+  List<String> results,
+) {
+  binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    _connectivityChannel,
+    (call) async {
+      expect(call.method, 'check');
+      return results;
+    },
+  );
+  addTearDown(() {
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      _connectivityChannel,
+      null,
+    );
+  });
 }
 
 void main() {
@@ -102,6 +125,30 @@ void main() {
     expect(state.pendingShareUrls, ['https://youtu.be/new123']);
     expect(settings.pendingShareUrls, ['https://youtu.be/new123']);
     expect(state.statusMessage, 'Saved 1 link(s) until you sign in.');
+  });
+
+  test('dismissed connection notice reappears after status changes', () async {
+    final settings = FakeSettingsService();
+    final state = _buildState(settingsService: settings);
+    await state.initialize();
+
+    expect(state.shouldShowConnectionNotice, isTrue);
+
+    await state.dismissConnectionNotice();
+
+    expect(state.shouldShowConnectionNotice, isFalse);
+    expect(settings.dismissedConnectionNoticeKey, state.connectionNoticeKey);
+
+    await state.saveSettings(
+      state.settings.copyWith(
+        serverUrl: 'http://ytnd.local:8080',
+        username: 'demo',
+        password: 'secret',
+      ),
+    );
+
+    expect(state.connectionStatus, ConnectionStatus.signedOut);
+    expect(state.shouldShowConnectionNotice, isTrue);
   });
 
   test('login flushes pending shared links into the queue', () async {
@@ -218,6 +265,326 @@ void main() {
     expect(state.lastErrorMessage, 'Your session expired. Sign in again.');
   });
 
+  test('library status separates server availability from downloads', () async {
+    final temp = await Directory.systemTemp.createTemp('ytnd_local_status');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    await File(p.join(temp.path, 'downloaded.opus')).writeAsString('audio');
+
+    final songs = const [
+      Song(
+        title: 'Server only',
+        artist: 'Demo',
+        filename: 'server-only.opus',
+        fileAvailable: true,
+      ),
+      Song(
+        title: 'Downloaded',
+        artist: 'Demo',
+        filename: 'downloaded.opus',
+        fileAvailable: true,
+      ),
+      Song(
+        title: 'Unavailable',
+        artist: 'Demo',
+        filename: 'missing.opus',
+        fileAvailable: false,
+      ),
+    ];
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(storagePath: temp.path),
+    );
+    final api = FakeApiService()..songs = songs;
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    expect(state.isSongAvailable(songs[0]), isTrue);
+    expect(state.isSongDownloaded(songs[0]), isFalse);
+    expect(state.isSongAvailable(songs[1]), isTrue);
+    expect(state.isSongDownloaded(songs[1]), isTrue);
+    expect(state.isSongAvailable(songs[2]), isFalse);
+    expect(state.isSongDownloaded(songs[2]), isFalse);
+  });
+
+  test('unsafe song filenames never count as downloaded', () async {
+    final temp = await Directory.systemTemp.createTemp('ytnd_unsafe_status');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final absolute = File(p.join(temp.path, 'absolute.opus'));
+    await absolute.writeAsString('audio');
+
+    final songs = [
+      const Song(
+        title: 'Parent segment',
+        artist: 'Demo',
+        filename: '../escape.opus',
+        fileAvailable: true,
+      ),
+      Song(
+        title: 'Absolute path',
+        artist: 'Demo',
+        filename: absolute.path,
+        fileAvailable: true,
+      ),
+      const Song(
+        title: 'Empty filename',
+        artist: 'Demo',
+        filename: '',
+        fileAvailable: true,
+      ),
+    ];
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(storagePath: temp.path),
+    );
+    final api = FakeApiService()..songs = songs;
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    for (final song in songs) {
+      expect(state.isSongDownloaded(song), isFalse);
+    }
+  });
+
+  test('startup sync runs after saved-session restore when enabled', () async {
+    _mockConnectivity(binding, ['wifi']);
+    final temp = await Directory.systemTemp.createTemp('ytnd_startup_sync');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(
+        syncOnStartup: true,
+        storagePath: temp.path,
+      ),
+    );
+    final api = FakeApiService()
+      ..songs = const [
+        Song(
+          title: 'Startup Song',
+          artist: 'Demo',
+          date: '2026-01-01',
+          fileAvailable: false,
+        ),
+      ];
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    expect(state.isAuthenticated, isTrue);
+    expect(api.fetchSongsCalls, 3);
+    expect(state.latestSyncSummary, isNotNull);
+    expect(state.latestSyncSummary!.message, 'Sync finished');
+  });
+
+  test('startup sync does not run when disabled', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService();
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    expect(api.fetchSongsCalls, 1);
+    expect(state.latestSyncSummary, isNull);
+  });
+
+  test('startup sync does not run while signed out', () async {
+    final settings = FakeSettingsService(
+      settings: const AppSettings(
+        serverUrl: 'http://ytnd.local:8080',
+        username: 'demo',
+        password: 'secret',
+        syncOnStartup: true,
+        storagePath: 'test-storage',
+      ),
+    );
+    final api = FakeApiService();
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    expect(state.connectionStatus, ConnectionStatus.signedOut);
+    expect(api.fetchSongsCalls, 0);
+    expect(state.latestSyncSummary, isNull);
+  });
+
+  test('startup sync does not run for manual sign-in', () async {
+    final temp = await Directory.systemTemp.createTemp('ytnd_manual_sign_in');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+
+    final settings = FakeSettingsService(
+      settings: AppSettings(
+        serverUrl: 'http://ytnd.local:8080',
+        username: 'demo',
+        password: 'secret',
+        syncOnStartup: true,
+        storagePath: temp.path,
+      ),
+    );
+    final api = FakeApiService();
+    final state = _buildState(settingsService: settings, apiService: api);
+    await state.initialize();
+
+    final signedIn = await state.login(
+      serverUrl: 'http://ytnd.local:8080',
+      username: 'demo',
+      password: 'secret',
+    );
+
+    expect(signedIn, isTrue);
+    expect(api.fetchSongsCalls, 1);
+    expect(state.latestSyncSummary, isNull);
+  });
+
+  test('startup sync does not run after unauthorized restore', () async {
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(syncOnStartup: true),
+    );
+    final api = FakeApiService()..authorized = false;
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    expect(state.isAuthenticated, isFalse);
+    expect(state.connectionStatus, ConnectionStatus.unauthorized);
+    expect(api.fetchSongsCalls, 0);
+    expect(state.latestSyncSummary, isNull);
+  });
+
+  test('startup sync respects WiFi-only on mobile networks', () async {
+    _mockConnectivity(binding, ['mobile']);
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(
+        syncOnStartup: true,
+        syncWifiOnly: true,
+      ),
+    );
+    final api = FakeApiService();
+    final state = _buildState(settingsService: settings, apiService: api);
+
+    await state.initialize();
+
+    expect(api.fetchSongsCalls, 1);
+    expect(state.latestSyncSummary, isNotNull);
+    expect(state.latestSyncSummary!.success, isFalse);
+    expect(state.latestSyncSummary!.message, 'Startup sync skipped: WiFi required.');
+  });
+
+  test('sync preferences persist immediately and survive initialize', () async {
+    _mockConnectivity(binding, ['wifi']);
+    final temp = await Directory.systemTemp.createTemp('ytnd_sync_prefs');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(storagePath: temp.path),
+    );
+    final background = FakeBackgroundSyncService();
+    final state = _buildState(
+      settingsService: settings,
+      backgroundSyncService: background,
+    );
+    await state.initialize();
+
+    final saved = await state.updateSyncPreferences(
+      syncIntervalHours: 2,
+      syncWifiOnly: true,
+      syncOnStartup: true,
+    );
+
+    expect(saved, isTrue);
+    expect(settings.settings.syncIntervalHours, 2);
+    expect(settings.settings.syncWifiOnly, isTrue);
+    expect(settings.settings.syncOnStartup, isTrue);
+    expect(settings.settings.userId, 'u1');
+    expect(settings.settings.storagePath, temp.path);
+    expect(background.configured, isTrue);
+
+    final restored = _buildState(settingsService: settings);
+    await restored.initialize();
+
+    expect(restored.settings.syncIntervalHours, 2);
+    expect(restored.settings.syncWifiOnly, isTrue);
+    expect(restored.settings.syncOnStartup, isTrue);
+    expect(restored.isAuthenticated, isTrue);
+  });
+
+  test(
+    'sync preference rollback restores persisted settings after configure failure',
+    () async {
+      final settings = FakeSettingsService(settings: _signedInSettings);
+      final background = FakeBackgroundSyncService();
+      final state = _buildState(
+        settingsService: settings,
+        backgroundSyncService: background,
+      );
+      await state.initialize();
+      background.configureError = Exception('configure failed');
+
+      final saved = await state.updateSyncPreferences(
+        syncIntervalHours: 2,
+        syncWifiOnly: true,
+        syncOnStartup: true,
+      );
+
+      expect(saved, isFalse);
+      expect(state.settings.syncIntervalHours, 0);
+      expect(state.settings.syncWifiOnly, isFalse);
+      expect(state.settings.syncOnStartup, isFalse);
+      expect(settings.settings.syncIntervalHours, 0);
+      expect(settings.settings.syncWifiOnly, isFalse);
+      expect(settings.settings.syncOnStartup, isFalse);
+      expect(settings.savedSettings.last.syncIntervalHours, 0);
+      expect(state.statusMessage, 'Could not save sync settings.');
+    },
+  );
+
+  test('logout clears session but preserves sync and storage settings', () async {
+    _mockConnectivity(binding, ['wifi']);
+    final temp = await Directory.systemTemp.createTemp('ytnd_logout_settings');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(
+        storagePath: temp.path,
+        syncIntervalHours: 6,
+        syncWifiOnly: true,
+        syncOnStartup: true,
+      ),
+    );
+    final state = _buildState(settingsService: settings);
+    await state.initialize();
+
+    await state.logout();
+
+    expect(settings.settings.userId, isEmpty);
+    expect(settings.settings.sessionCookie, isEmpty);
+    expect(settings.settings.storagePath, temp.path);
+    expect(settings.settings.syncIntervalHours, 6);
+    expect(settings.settings.syncWifiOnly, isTrue);
+    expect(settings.settings.syncOnStartup, isTrue);
+    expect(state.connectionStatus, ConnectionStatus.signedOut);
+  });
+
   test('websocket download errors do not expose raw backend text', () async {
     final settings = FakeSettingsService(settings: _signedInSettings);
     final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
@@ -256,6 +623,151 @@ void main() {
       state.lastErrorMessage,
       'Download failed. Check the link and try again.',
     );
+  });
+
+  test('download errors create a fresh dismissible notice', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
+    final websocket = FakeWebsocketService();
+    final state = _buildState(
+      settingsService: settings,
+      apiService: api,
+      websocketService: websocket,
+    );
+    await state.initialize();
+    await state.dismissConnectionNotice();
+
+    expect(state.shouldShowConnectionNotice, isFalse);
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_error',
+        'error': 'network timeout',
+      }),
+    );
+    await pumpEventQueue();
+
+    expect(state.shouldShowConnectionNotice, isTrue);
+    expect(
+      state.lastErrorMessage,
+      'Download failed. Check your connection and try again.',
+    );
+  });
+
+  test('websocket progress merges normalized queue URLs', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService()
+      ..queue = [
+        'https://www.youtube.com/watch?v=abc123&list=context-playlist',
+      ];
+    final websocket = FakeWebsocketService();
+    final state = _buildState(
+      settingsService: settings,
+      apiService: api,
+      websocketService: websocket,
+    );
+    await state.initialize();
+
+    expect(state.downloadQueue, hasLength(1));
+    expect(state.queuedQueue, hasLength(1));
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_progress',
+        'url': 'https://youtu.be/abc123?si=share',
+        'status': 'downloading',
+        'percentage': 42,
+      }),
+    );
+    await pumpEventQueue();
+
+    expect(state.downloadQueue, hasLength(1));
+    expect(state.inProgressQueue, hasLength(1));
+    expect(state.queuedQueue, isEmpty);
+    expect(state.inProgressQueue.single.percentage, 42);
+
+    await state.refreshQueue();
+
+    expect(state.inProgressQueue.single.status, DownloadStatus.downloading);
+    expect(state.inProgressQueue.single.percentage, 42);
+    expect(state.queuedQueue, isEmpty);
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_progress',
+        'url': 'https://music.youtube.com/watch?v=abc123',
+        'status': 'processing',
+        'percentage': 100,
+      }),
+    );
+    await pumpEventQueue();
+    await state.refreshQueue();
+
+    expect(state.inProgressQueue.single.status, DownloadStatus.processing);
+    expect(state.inProgressQueue.single.percentage, 100);
+    expect(state.queuedQueue, isEmpty);
+  });
+
+  test('failed websocket progress appears in failed queue section', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
+    final websocket = FakeWebsocketService();
+    final state = _buildState(
+      settingsService: settings,
+      apiService: api,
+      websocketService: websocket,
+    );
+    await state.initialize();
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_progress',
+        'url': 'https://youtu.be/abc123',
+        'status': 'error',
+        'error': 'video unavailable',
+      }),
+    );
+    await pumpEventQueue();
+
+    expect(state.failedQueue, hasLength(1));
+    expect(state.queuedQueue, isEmpty);
+    expect(
+      state.failedQueue.single.error,
+      'Download failed. This video is unavailable.',
+    );
+  });
+
+  test('retrying failed queue item refreshes it as queued', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
+    final websocket = FakeWebsocketService();
+    final state = _buildState(
+      settingsService: settings,
+      apiService: api,
+      websocketService: websocket,
+    );
+    await state.initialize();
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_progress',
+        'url': 'https://www.youtube.com/watch?v=abc123&list=context',
+        'status': 'error',
+        'error': 'video unavailable',
+      }),
+    );
+    await pumpEventQueue();
+
+    expect(state.failedQueue, hasLength(1));
+
+    final retried = await state.retryFailedDownload(state.failedQueue.single);
+    await state.refreshQueue();
+
+    expect(retried, isTrue);
+    expect(state.failedQueue, isEmpty);
+    expect(state.queuedQueue, hasLength(1));
+    expect(state.queuedQueue.single.status, DownloadStatus.pending);
+    expect(state.queuedQueue.single.error, isNull);
   });
 
   for (final kind in [
@@ -335,6 +847,56 @@ void main() {
     expect(await firstSync, isFalse);
     expect(state.isSyncing, isFalse);
     expect(state.connectionStatus, ConnectionStatus.unreachable);
+    expect(state.lastErrorMessage, 'Sync skipped: no network access.');
+    expect(state.connectionMessage, 'Sync skipped: no network access.');
+  });
+
+  test('syncNow stores a summary without bloating connection copy', () async {
+    binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      _connectivityChannel,
+      (call) async {
+        expect(call.method, 'check');
+        return ['wifi'];
+      },
+    );
+    addTearDown(() {
+      binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        _connectivityChannel,
+        null,
+      );
+    });
+
+    final temp = await Directory.systemTemp.createTemp('ytnd_app_state_sync');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(storagePath: temp.path),
+    );
+    final api = FakeApiService()
+      ..songs = const [
+        Song(
+          title: 'Dreamscape',
+          artist: 'Aural Drift',
+          date: '2025-05-10',
+          fileAvailable: false,
+        ),
+      ];
+    final state = _buildState(settingsService: settings, apiService: api);
+    await state.initialize();
+
+    final synced = await state.syncNow();
+
+    expect(synced, isTrue);
+    expect(state.latestSyncSummary, isNotNull);
+    expect(state.latestSyncSummary!.remoteCount, 1);
+    expect(state.latestSyncSummary!.downloaded, 0);
+    expect(state.statusMessage, 'Sync finished');
+    expect(state.statusMessage, isNot(contains('server songs')));
+    expect(state.connectionMessage, 'http://ytnd.local:8080');
   });
 
   test('dispose makes websocket and share events inert', () async {
@@ -400,4 +962,41 @@ void main() {
       expect(state.connectionStatus, ConnectionStatus.signedOut);
     },
   );
+
+  test('account saves preserve sync and storage settings', () async {
+    _mockConnectivity(binding, ['wifi']);
+    final temp = await Directory.systemTemp.createTemp('ytnd_account_save');
+    addTearDown(() async {
+      if (await temp.exists()) {
+        await temp.delete(recursive: true);
+      }
+    });
+    final settings = FakeSettingsService(
+      settings: _signedInSettings.copyWith(
+        storagePath: temp.path,
+        syncIntervalHours: 12,
+        syncWifiOnly: true,
+        syncOnStartup: true,
+      ),
+    );
+    final state = _buildState(settingsService: settings);
+    await state.initialize();
+
+    await state.saveSettings(
+      state.settings.copyWith(
+        serverUrl: 'http://new.local',
+        username: 'new-user',
+        password: 'new-secret',
+      ),
+    );
+
+    expect(settings.settings.serverUrl, 'http://new.local');
+    expect(settings.settings.username, 'new-user');
+    expect(settings.settings.userId, isEmpty);
+    expect(settings.settings.sessionCookie, isEmpty);
+    expect(settings.settings.storagePath, temp.path);
+    expect(settings.settings.syncIntervalHours, 12);
+    expect(settings.settings.syncWifiOnly, isTrue);
+    expect(settings.settings.syncOnStartup, isTrue);
+  });
 }

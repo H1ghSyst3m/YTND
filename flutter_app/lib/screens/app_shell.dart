@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/sync_summary.dart';
 import '../state/app_state.dart';
 import 'library_screen.dart';
 import 'queue_screen.dart';
@@ -41,43 +42,35 @@ class _AppShellState extends State<AppShell> {
           });
         }
 
-        final titles = <String>['Library', 'Queue', 'Settings'];
+        const titles = <String>['Library', 'Queue', 'Settings'];
         return Scaffold(
           appBar: AppBar(
             titleSpacing: 16,
-            title: Row(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: const Image(
-                    image: AssetImage('assets/logo.png'),
-                    width: 32,
-                    height: 32,
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text('YTND'),
-                    Text(
-                      titles[_selectedIndex],
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+            title: _AppTitle(sectionTitle: titles[_selectedIndex]),
+            actions: _actionsFor(context, appState),
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(1),
+              child: Divider(
+                height: 1,
+                color: Theme.of(context).colorScheme.outlineVariant,
+              ),
             ),
           ),
           body: SafeArea(
             top: false,
             child: Column(
               children: [
-                _StatusBanner(onOpenSettings: () => _selectTab(2)),
+                if (appState.shouldShowConnectionNotice)
+                  _ConnectionNotice(onOpenSettings: () => _selectTab(2)),
+                if (appState.isSyncing || appState.latestSyncSummary != null)
+                  _SyncStatusStrip(
+                    onOpenDetails: appState.latestSyncSummary == null
+                        ? null
+                        : () => _showSyncDetails(
+                            context,
+                            appState.latestSyncSummary!,
+                          ),
+                  ),
                 Expanded(
                   child: IndexedStack(
                     index: _selectedIndex,
@@ -104,10 +97,10 @@ class _AppShellState extends State<AppShell> {
                 icon: appState.pendingShareCount > 0
                     ? Badge(
                         label: Text('${appState.pendingShareCount}'),
-                        child: const Icon(Icons.download_outlined),
+                        child: const Icon(Icons.format_list_bulleted),
                       )
-                    : const Icon(Icons.download_outlined),
-                selectedIcon: const Icon(Icons.download),
+                    : const Icon(Icons.format_list_bulleted),
+                selectedIcon: const Icon(Icons.format_list_bulleted),
                 label: 'Queue',
               ),
               const NavigationDestination(
@@ -119,6 +112,115 @@ class _AppShellState extends State<AppShell> {
           ),
         );
       },
+    );
+  }
+
+  List<Widget> _actionsFor(BuildContext context, AppState appState) {
+    final actions = <Widget>[];
+    final syncSummary = appState.latestSyncSummary;
+    if (syncSummary != null) {
+      actions.add(
+        IconButton(
+          tooltip: 'Sync details',
+          onPressed: () => _showSyncDetails(context, syncSummary),
+          icon: const Icon(Icons.receipt_long_outlined),
+        ),
+      );
+    }
+
+    if (_selectedIndex == 0) {
+      actions.addAll([
+        IconButton(
+          tooltip: 'Refresh songs',
+          onPressed: !appState.isAuthenticated || appState.isLibraryLoading
+              ? null
+              : appState.refreshSongs,
+          icon: const Icon(Icons.refresh),
+        ),
+        IconButton(
+          tooltip: appState.isSyncing ? 'Syncing' : 'Sync now',
+          onPressed: !appState.isAuthenticated || appState.isSyncing
+              ? null
+              : appState.syncNow,
+          icon: appState.isSyncing
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.sync),
+        ),
+      ]);
+    } else if (_selectedIndex == 1) {
+      actions.addAll([
+        IconButton(
+          tooltip: 'Refresh queue',
+          onPressed: !appState.isAuthenticated || appState.isQueueLoading
+              ? null
+              : appState.refreshQueue,
+          icon: const Icon(Icons.refresh),
+        ),
+        IconButton(
+          tooltip: 'Start downloads',
+          onPressed: !appState.isAuthenticated ||
+                  appState.queuedQueue.isEmpty ||
+                  appState.isQueueProcessing
+              ? null
+              : appState.processQueue,
+          icon: appState.isQueueProcessing
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.play_arrow),
+        ),
+      ]);
+    }
+
+    return actions;
+  }
+
+  Future<void> _showSyncDetails(
+    BuildContext context,
+    SyncSummary summary,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => _SyncDetailsSheet(summary: summary),
+    );
+  }
+}
+
+class _AppTitle extends StatelessWidget {
+  const _AppTitle({required this.sectionTitle});
+
+  final String sectionTitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: const Image(
+            image: AssetImage('assets/logo.png'),
+            width: 30,
+            height: 30,
+            fit: BoxFit.cover,
+          ),
+        ),
+        const SizedBox(width: 10),
+        const Text('YTND'),
+        const SizedBox(width: 18),
+        Text(
+          sectionTitle,
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+            color: scheme.primary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -158,8 +260,8 @@ class _SplashScreen extends StatelessWidget {
   }
 }
 
-class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.onOpenSettings});
+class _ConnectionNotice extends StatelessWidget {
+  const _ConnectionNotice({required this.onOpenSettings});
 
   final VoidCallback onOpenSettings;
 
@@ -168,124 +270,268 @@ class _StatusBanner extends StatelessWidget {
     final appState = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final color = _statusColor(appState.connectionStatus, scheme);
-    final icon = _statusIcon(appState.connectionStatus);
-    final pendingCount = appState.pendingShareCount;
+    final showSettings = appState.connectionStatus != ConnectionStatus.connected;
+    final message = appState.lastErrorMessage ?? appState.connectionMessage;
 
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        border: Border(
-          top: BorderSide(color: color.withValues(alpha: 0.16)),
-          bottom: BorderSide(color: color.withValues(alpha: 0.24)),
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+      child: Material(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 9, 6, 9),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(_statusIcon(appState.connectionStatus), color: color),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      appState.connectionTitle,
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _noticeMessage(appState, message),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (appState.connectionStatus == ConnectionStatus.unreachable)
+                IconButton(
+                  tooltip: 'Retry',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: appState.retryConnection,
+                  icon: const Icon(Icons.refresh),
+                ),
+              if (showSettings)
+                IconButton(
+                  tooltip: 'Open Settings',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onOpenSettings,
+                  icon: const Icon(Icons.tune),
+                ),
+              IconButton(
+                tooltip: 'Dismiss',
+                visualDensity: VisualDensity.compact,
+                onPressed: appState.dismissConnectionNotice,
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
         ),
       ),
-      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 22),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  appState.connectionTitle,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _bannerMessage(appState),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+    );
+  }
+
+  String _noticeMessage(AppState appState, String message) {
+    final pending = appState.pendingShareCount;
+    if (pending == 0) {
+      return message;
+    }
+    return '$message $pending shared link(s) waiting.';
+  }
+}
+
+class _SyncStatusStrip extends StatelessWidget {
+  const _SyncStatusStrip({this.onOpenDetails});
+
+  final VoidCallback? onOpenDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = context.watch<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    final summary = appState.latestSyncSummary;
+    final title = appState.isSyncing
+        ? 'Syncing songs'
+        : summary?.message ?? 'Sync details';
+    final subtitle = summary == null
+        ? 'Comparing server and local files'
+        : '${summary.remoteCount} server songs, ${summary.downloaded} downloaded, ${summary.deleted} removed';
+
+    return InkWell(
+      onTap: onOpenDetails,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(16, 8, 12, 8),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(color: scheme.outlineVariant),
+          ),
+        ),
+        child: Row(
+          children: [
+            appState.isSyncing
+                ? const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    summary?.success == false
+                        ? Icons.error_outline
+                        : Icons.check_circle_outline,
+                    color: summary?.success == false
+                        ? scheme.error
+                        : scheme.secondary,
+                    size: 20,
                   ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.labelLarge),
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (summary != null) const Icon(Icons.keyboard_arrow_up),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SyncDetailsSheet extends StatelessWidget {
+  const _SyncDetailsSheet({required this.summary});
+
+  final SyncSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final appState = context.read<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  summary.success
+                      ? Icons.check_circle_outline
+                      : Icons.error_outline,
+                  color: summary.success ? scheme.secondary : scheme.error,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    summary.message,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: () {
+                    appState.clearLatestSyncSummary(summary);
+                    Navigator.of(context).pop();
+                  },
+                  icon: const Icon(Icons.close),
                 ),
               ],
             ),
-          ),
-          const SizedBox(width: 8),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            alignment: WrapAlignment.end,
-            children: [
-              if (appState.connectionStatus == ConnectionStatus.unreachable)
-                TextButton.icon(
-                  onPressed: appState.retryConnection,
-                  icon: const Icon(Icons.refresh, size: 18),
-                  label: const Text('Retry'),
-                ),
-              if (pendingCount > 0 && appState.isAuthenticated)
-                TextButton.icon(
-                  onPressed: appState.isAddingToQueue
-                      ? null
-                      : appState.retryPendingShareUrls,
-                  icon: const Icon(Icons.playlist_add, size: 18),
-                  label: const Text('Add'),
-                ),
-              if (appState.connectionStatus != ConnectionStatus.connected)
-                TextButton.icon(
-                  onPressed: onOpenSettings,
-                  icon: const Icon(Icons.tune, size: 18),
-                  label: const Text('Settings'),
-                ),
-            ],
+            const SizedBox(height: 8),
+            _SyncDetailRow(label: 'Server songs', value: summary.remoteCount),
+            _SyncDetailRow(label: 'Downloaded', value: summary.downloaded),
+            _SyncDetailRow(label: 'Removed locally', value: summary.deleted),
+            const SizedBox(height: 8),
+            Text(
+              _completedText(summary.completedAt),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _completedText(DateTime value) {
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return 'Completed at $hour:$minute';
+  }
+}
+
+class _SyncDetailRow extends StatelessWidget {
+  const _SyncDetailRow({required this.label, required this.value});
+
+  final String label;
+  final int value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          Text(
+            '$value',
+            style: Theme.of(context).textTheme.titleSmall,
           ),
         ],
       ),
     );
   }
+}
 
-  String _bannerMessage(AppState appState) {
-    final pending = appState.pendingShareCount;
-    final parts = <String>[appState.connectionMessage];
-    if (pending > 0) {
-      parts.add('$pending shared link(s) waiting.');
-    } else if (appState.statusMessage.isNotEmpty &&
-        appState.connectionStatus == ConnectionStatus.connected) {
-      parts.add(appState.statusMessage);
-    }
-    return parts.join(' ');
+IconData _statusIcon(ConnectionStatus status) {
+  switch (status) {
+    case ConnectionStatus.setupRequired:
+      return Icons.settings_suggest_outlined;
+    case ConnectionStatus.signedOut:
+      return Icons.lock_outline;
+    case ConnectionStatus.checking:
+      return Icons.sync;
+    case ConnectionStatus.connected:
+      return Icons.cloud_done_outlined;
+    case ConnectionStatus.unreachable:
+      return Icons.cloud_off_outlined;
+    case ConnectionStatus.unauthorized:
+      return Icons.key_off_outlined;
+    case ConnectionStatus.invalidCredentials:
+      return Icons.lock_person_outlined;
   }
+}
 
-  IconData _statusIcon(ConnectionStatus status) {
-    switch (status) {
-      case ConnectionStatus.setupRequired:
-        return Icons.settings_suggest_outlined;
-      case ConnectionStatus.signedOut:
-        return Icons.lock_outline;
-      case ConnectionStatus.checking:
-        return Icons.sync;
-      case ConnectionStatus.connected:
-        return Icons.cloud_done_outlined;
-      case ConnectionStatus.unreachable:
-        return Icons.cloud_off_outlined;
-      case ConnectionStatus.unauthorized:
-        return Icons.key_off_outlined;
-      case ConnectionStatus.invalidCredentials:
-        return Icons.lock_person_outlined;
-    }
-  }
-
-  Color _statusColor(ConnectionStatus status, ColorScheme scheme) {
-    switch (status) {
-      case ConnectionStatus.setupRequired:
-      case ConnectionStatus.signedOut:
-        return scheme.tertiary;
-      case ConnectionStatus.checking:
-        return scheme.primary;
-      case ConnectionStatus.connected:
-        return scheme.secondary;
-      case ConnectionStatus.unreachable:
-      case ConnectionStatus.unauthorized:
-      case ConnectionStatus.invalidCredentials:
-        return scheme.error;
-    }
+Color _statusColor(ConnectionStatus status, ColorScheme scheme) {
+  switch (status) {
+    case ConnectionStatus.setupRequired:
+    case ConnectionStatus.signedOut:
+      return scheme.tertiary;
+    case ConnectionStatus.checking:
+      return scheme.primary;
+    case ConnectionStatus.connected:
+      return scheme.secondary;
+    case ConnectionStatus.unreachable:
+    case ConnectionStatus.unauthorized:
+    case ConnectionStatus.invalidCredentials:
+      return scheme.error;
   }
 }

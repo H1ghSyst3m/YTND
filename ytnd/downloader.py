@@ -4,6 +4,7 @@ Downloader with persistent queue managed via database.
 """
 from __future__ import annotations
 import json, uuid, concurrent.futures, time, subprocess, shutil, os, re
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
@@ -14,7 +15,15 @@ from mutagen.oggopus import OggOpus
 import yt_dlp
 
 from .config import FFMPEG_EXECUTABLE, OUTPUT_ROOT, COOKIES_FILE, COVERS_ROOT
-from .utils import sanitize_filename, sanitize_user_id, logger, get_context_logger, is_youtube_playlist_url, strip_playlist_context
+from .utils import (
+    sanitize_filename,
+    sanitize_user_id,
+    logger,
+    get_context_logger,
+    is_youtube_playlist_url,
+    strip_playlist_context,
+    write_json_atomic,
+)
 from . import database
 
 if TYPE_CHECKING:
@@ -29,6 +38,13 @@ JS_RUNTIME_BINARIES = {
     "node": ("node",),
     "quickjs": ("qjs", "quickjs"),
 }
+
+def _utc_now_iso() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
 
 def _shorten(s: str, maxlen: int = 600) -> str:
     s = clean_ytdlp_message(s)
@@ -651,6 +667,7 @@ class Downloader:
             "artist": entry.uploader,
             "url": entry.url,
             "date": entry.upload_date,
+            "downloaded_at": _utc_now_iso(),
             "cover": cover_filename,
         }
         
@@ -796,8 +813,7 @@ class Downloader:
 
     def _save_song_cache(self) -> None:
         try:
-            with self.song_list_path.open("w", encoding="utf-8") as f:
-                json.dump(list(self._song_cache.values()), f, indent=4, ensure_ascii=False)
+            write_json_atomic(self.song_list_path, list(self._song_cache.values()))
         except (OSError, PermissionError) as e:
             self.log.error("Failed to save song cache: %s", e)
             raise RuntimeError(f"Cannot save song cache: {e}")

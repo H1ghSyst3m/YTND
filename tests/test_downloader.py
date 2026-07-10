@@ -1,5 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timezone
+import json
+import os
 import subprocess
 
 import pytest
@@ -70,6 +73,220 @@ def test_save_cover_allows_ffmpeg_from_path(monkeypatch):
     assert downloader._save_cover(entry) == "video123.jpg"
     assert (downloader.cover_dir / "video123.jpg").exists()
     assert not (downloader.cover_dir / "video123.webp").exists()
+
+
+def test_process_entry_records_server_download_time(monkeypatch):
+    uid = "downloadtime"
+    downloader = Downloader(uid)
+    entry = SimpleNamespace(
+        id="video-time",
+        title="Timed Song",
+        uploader="Timed Artist",
+        url="https://example.test/watch?v=video-time",
+        upload_date="2024-01-02",
+    )
+
+    class FakeYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def download(self, urls):
+            Path(self.opts["outtmpl"].replace("%(ext)s", "opus")).write_bytes(
+                b"audio"
+            )
+            for hook in self.opts.get("progress_hooks", []):
+                hook({"status": "finished"})
+            return 0
+
+    monkeypatch.setattr(downloader_module.yt_dlp, "YoutubeDL", FakeYoutubeDL)
+    monkeypatch.setattr(Downloader, "_set_tags", lambda self, path, entry: None)
+    monkeypatch.setattr(
+        Downloader, "_save_cover", lambda self, entry: "video-time.jpg"
+    )
+
+    downloader._process_entry(entry)
+
+    song = downloader._song_cache["video-time"]
+    assert song["date"] == "2024-01-02"
+    downloaded_at = song["downloaded_at"]
+    assert downloaded_at.endswith("Z")
+    assert (
+        datetime.fromisoformat(downloaded_at.replace("Z", "+00:00")).tzinfo
+        is not None
+    )
+
+
+def test_manager_write_song_list_writes_valid_json_atomically():
+    uid = "atomicmanager"
+    folder = manager_module.OUTPUT_ROOT / uid
+
+    manager_module._write_song_list(
+        uid,
+        [{"id": "song1", "title": "Atomic", "artist": "Writer"}],
+    )
+
+    song_list = folder / "song-list.json"
+    assert json.loads(song_list.read_text(encoding="utf-8")) == [
+        {"id": "song1", "title": "Atomic", "artist": "Writer"}
+    ]
+    assert not list(folder.glob(".song-list.json.*.tmp"))
+
+
+def test_downloader_save_song_cache_uses_atomic_json_writer(monkeypatch):
+    downloader = Downloader("atomicdownloader")
+    downloader._song_cache = {
+        "song2": {"id": "song2", "title": "Atomic", "artist": "Downloader"}
+    }
+    calls = []
+    original = downloader_module.write_json_atomic
+
+    def spy_write_json_atomic(path, data, **kwargs):
+        calls.append((path, data))
+        return original(path, data, **kwargs)
+
+    monkeypatch.setattr(
+        downloader_module, "write_json_atomic", spy_write_json_atomic
+    )
+
+    downloader._save_song_cache()
+
+    assert calls == [
+        (
+            downloader.song_list_path,
+            [{"id": "song2", "title": "Atomic", "artist": "Downloader"}],
+        )
+    ]
+    assert json.loads(downloader.song_list_path.read_text(encoding="utf-8")) == [
+        {"id": "song2", "title": "Atomic", "artist": "Downloader"}
+    ]
+
+
+def test_api_songs_backfills_downloaded_at_from_audio_mtime(client):
+    uid = "songdateapi"
+    try:
+        database.add_user(uid)
+    except ValueError:
+        pass
+    folder = manager_module.OUTPUT_ROOT / uid
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "song-list.json").write_text(
+        json.dumps([{"id": "video-api", "title": "Fresh", "artist": "Artist"}]),
+        encoding="utf-8",
+    )
+    audio = folder / "Fresh # Artist.opus"
+    audio.write_bytes(b"audio")
+    timestamp = 1_750_000_000
+    os.utime(audio, (timestamp, timestamp))
+    expected = (
+        datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+    response = client.get(
+        "/api/songs",
+        params={"user_id": uid},
+        cookies={
+            SESSION_UID_COOKIE: uid,
+            SESSION_SIG_COOKIE: _sign_uid(uid),
+        },
+    )
+
+    assert response.status_code == 200
+    song = response.json()["songs"][0]
+    assert song["downloaded_at"] == expected
+    assert song["file_available"] is True
+
+    saved = json.loads((folder / "song-list.json").read_text(encoding="utf-8"))
+    assert saved[0]["downloaded_at"] == expected
+
+
+def test_api_songs_backfill_reloads_latest_song_list_before_write(client, monkeypatch):
+    uid = "songdataconcurrent"
+    try:
+        database.add_user(uid)
+    except ValueError:
+        pass
+    folder = manager_module.OUTPUT_ROOT / uid
+    folder.mkdir(parents=True, exist_ok=True)
+    initial = [{"id": "video-old", "title": "Old", "artist": "Artist"}]
+    concurrent = [
+        {"id": "video-old", "title": "Old", "artist": "Artist"},
+        {
+            "id": "video-new",
+            "title": "Concurrent",
+            "artist": "Writer",
+            "downloaded_at": "2026-01-01T00:00:00.000000Z",
+        },
+    ]
+    song_list = folder / "song-list.json"
+    song_list.write_text(json.dumps(initial), encoding="utf-8")
+    audio = folder / "Old # Artist.opus"
+    audio.write_bytes(b"audio")
+    timestamp = 1_750_000_000
+    os.utime(audio, (timestamp, timestamp))
+
+    original_find_audio = manager_module._find_audio_file
+    wrote_concurrent_snapshot = False
+
+    def race_find_audio(user_id, title, artist):
+        nonlocal wrote_concurrent_snapshot
+        result = original_find_audio(user_id, title, artist)
+        if not wrote_concurrent_snapshot:
+            wrote_concurrent_snapshot = True
+            song_list.write_text(json.dumps(concurrent), encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(manager_module, "_find_audio_file", race_find_audio)
+
+    response = client.get(
+        "/api/songs",
+        params={"user_id": uid},
+        cookies={
+            SESSION_UID_COOKIE: uid,
+            SESSION_SIG_COOKIE: _sign_uid(uid),
+        },
+    )
+
+    assert response.status_code == 200
+    saved = json.loads(song_list.read_text(encoding="utf-8"))
+    assert [song["id"] for song in saved] == ["video-old", "video-new"]
+    assert saved[0]["downloaded_at"]
+    assert saved[1]["downloaded_at"] == "2026-01-01T00:00:00.000000Z"
+
+
+def test_api_songs_returns_null_downloaded_at_without_audio(client):
+    uid = "songdatenull"
+    try:
+        database.add_user(uid)
+    except ValueError:
+        pass
+    folder = manager_module.OUTPUT_ROOT / uid
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "song-list.json").write_text(
+        json.dumps([{"id": "video-null", "title": "Missing", "artist": "Artist"}]),
+        encoding="utf-8",
+    )
+
+    response = client.get(
+        "/api/songs",
+        params={"user_id": uid},
+        cookies={
+            SESSION_UID_COOKIE: uid,
+            SESSION_SIG_COOKIE: _sign_uid(uid),
+        },
+    )
+
+    assert response.status_code == 200
+    song = response.json()["songs"][0]
+    assert song["downloaded_at"] is None
+    assert song["file_available"] is False
 
 
 def test_yt_dlp_options_use_configured_deno_path(monkeypatch, tmp_path):

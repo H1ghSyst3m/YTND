@@ -51,4 +51,23 @@ Not supported: https://example.com/watch?v=abc123
       'https://www.youtube.com/watch?v=(abc)',
     ]);
   });
+
+  test('builds canonical queue keys for video and playlist URLs', () {
+    expect(
+      SharedUrlParser.queueKeyFor('https://youtu.be/abc123?si=share'),
+      'youtube:video:abc123',
+    );
+    expect(
+      SharedUrlParser.queueKeyFor(
+        'https://www.youtube.com/watch?v=abc123&list=playlist-context',
+      ),
+      'youtube:video:abc123',
+    );
+    expect(
+      SharedUrlParser.queueKeyFor(
+        'https://www.youtube.com/playlist?list=PL123',
+      ),
+      'youtube:playlist:PL123',
+    );
+  });
 }

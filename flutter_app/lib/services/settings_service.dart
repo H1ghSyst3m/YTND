@@ -11,8 +11,11 @@ class SettingsService {
   static const _sessionCookieKey = 'session_cookie';
   static const _syncIntervalHoursKey = 'sync_interval_hours';
   static const _syncWifiOnlyKey = 'sync_wifi_only';
+  static const _syncOnStartupKey = 'sync_on_startup';
   static const _storagePathKey = 'storage_path';
   static const _pendingShareUrlsKey = 'pending_share_urls';
+  static const _dismissedConnectionNoticeKey =
+      'dismissed_connection_notice_key';
 
   static const _secureStorage = FlutterSecureStorage();
 
@@ -26,6 +29,7 @@ class SettingsService {
       sessionCookie: await _secureStorage.read(key: _sessionCookieKey) ?? '',
       syncIntervalHours: (prefs.getInt(_syncIntervalHoursKey) ?? 0).clamp(0, 168),
       syncWifiOnly: prefs.getBool(_syncWifiOnlyKey) ?? false,
+      syncOnStartup: prefs.getBool(_syncOnStartupKey) ?? false,
       storagePath: prefs.getString(_storagePathKey) ?? AppSettings.defaultStoragePath,
     );
   }
@@ -37,6 +41,7 @@ class SettingsService {
     await prefs.setString(_userIdKey, settings.userId);
     await prefs.setInt(_syncIntervalHoursKey, settings.syncIntervalHours.clamp(0, 168));
     await prefs.setBool(_syncWifiOnlyKey, settings.syncWifiOnly);
+    await prefs.setBool(_syncOnStartupKey, settings.syncOnStartup);
     await prefs.setString(_storagePathKey, settings.storagePath);
     await _secureStorage.write(key: _passwordKey, value: settings.password);
     await _secureStorage.write(key: _sessionCookieKey, value: settings.sessionCookie);
@@ -58,6 +63,20 @@ class SettingsService {
       }
     }
     await prefs.setStringList(_pendingShareUrlsKey, unique);
+  }
+
+  Future<String?> loadDismissedConnectionNoticeKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_dismissedConnectionNoticeKey);
+  }
+
+  Future<void> saveDismissedConnectionNoticeKey(String? key) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (key == null || key.isEmpty) {
+      await prefs.remove(_dismissedConnectionNoticeKey);
+      return;
+    }
+    await prefs.setString(_dismissedConnectionNoticeKey, key);
   }
 
   Future<void> clearSession() async {

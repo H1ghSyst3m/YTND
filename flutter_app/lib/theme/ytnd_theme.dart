@@ -40,13 +40,13 @@ class YtndTheme {
       primary: const Color(0xFF007E9A),
       secondary: const Color(0xFF047A52),
       tertiary: const Color(0xFF9A6400),
-      surface: const Color(0xFFF7FAFD),
-      surfaceContainerHighest: const Color(0xFFE8F0F7),
+      surface: Colors.white,
+      surfaceContainerHighest: const Color(0xFFF1F5F8),
     );
     return _base(scheme).copyWith(
-      scaffoldBackgroundColor: const Color(0xFFF3F7FB),
+      scaffoldBackgroundColor: Colors.white,
       appBarTheme: const AppBarTheme(
-        backgroundColor: Color(0xFFF3F7FB),
+        backgroundColor: Colors.white,
         foregroundColor: ink,
         elevation: 0,
         centerTitle: false,
@@ -58,7 +58,7 @@ class YtndTheme {
     return ThemeData(
       colorScheme: scheme,
       useMaterial3: true,
-      visualDensity: VisualDensity.standard,
+      visualDensity: VisualDensity.compact,
       cardTheme: CardThemeData(
         elevation: 0,
         margin: EdgeInsets.zero,
@@ -71,17 +71,19 @@ class YtndTheme {
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 13),
         filled: true,
         fillColor: scheme.surfaceContainerHighest.withValues(alpha: 0.35),
       ),

@@ -21,7 +21,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _storageController;
   late int _syncInterval;
   late bool _syncWifiOnly;
+  late bool _syncOnStartup;
   bool _obscurePassword = true;
+  bool _isSavingSyncPreferences = false;
+  int _syncPreferenceRevision = 0;
+  final List<_SyncPreferenceDraft> _syncPreferenceQueue = [];
 
   static const List<int> _syncIntervals = [0, 1, 2, 6, 12];
 
@@ -33,10 +37,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _usernameController = TextEditingController(text: settings.username);
     _passwordController = TextEditingController(text: settings.password);
     _storageController = TextEditingController(text: settings.storagePath);
-    _syncInterval = _syncIntervals.contains(settings.syncIntervalHours)
-        ? settings.syncIntervalHours
-        : _syncIntervals.first;
+    _syncInterval = _normalizedSyncInterval(settings.syncIntervalHours);
     _syncWifiOnly = settings.syncWifiOnly;
+    _syncOnStartup = settings.syncOnStartup;
   }
 
   @override
@@ -55,6 +58,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _updateSyncPreferences({
+    int? syncIntervalHours,
+    bool? syncWifiOnly,
+    bool? syncOnStartup,
+  }) async {
+    final nextInterval = _normalizedSyncInterval(
+      syncIntervalHours ?? _syncInterval,
+    );
+    final nextWifiOnly = syncWifiOnly ?? _syncWifiOnly;
+    final nextOnStartup = syncOnStartup ?? _syncOnStartup;
+    final revision = ++_syncPreferenceRevision;
+
+    setState(() {
+      _syncInterval = nextInterval;
+      _syncWifiOnly = nextWifiOnly;
+      _syncOnStartup = nextOnStartup;
+    });
+
+    _syncPreferenceQueue.add(
+      _SyncPreferenceDraft(
+        revision: revision,
+        syncIntervalHours: nextInterval,
+        syncWifiOnly: nextWifiOnly,
+        syncOnStartup: nextOnStartup,
+      ),
+    );
+
+    if (!_isSavingSyncPreferences) {
+      await _drainSyncPreferenceQueue();
+    }
+  }
+
+  Future<void> _drainSyncPreferenceQueue() async {
+    if (_isSavingSyncPreferences) {
+      return;
+    }
+
+    setState(() => _isSavingSyncPreferences = true);
+    final appState = context.read<AppState>();
+    try {
+      while (mounted && _syncPreferenceQueue.isNotEmpty) {
+        final draft = _syncPreferenceQueue.removeAt(0);
+        final saved = await appState.updateSyncPreferences(
+          syncIntervalHours: draft.syncIntervalHours,
+          syncWifiOnly: draft.syncWifiOnly,
+          syncOnStartup: draft.syncOnStartup,
+        );
+
+        if (!saved && mounted && draft.revision == _syncPreferenceRevision) {
+          _syncPreferenceQueue.clear();
+          final settings = appState.settings;
+          setState(() {
+            _syncInterval = _normalizedSyncInterval(
+              settings.syncIntervalHours,
+            );
+            _syncWifiOnly = settings.syncWifiOnly;
+            _syncOnStartup = settings.syncOnStartup;
+          });
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(appState.statusMessage)));
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSavingSyncPreferences = false);
+      }
+    }
+  }
+
+  int _normalizedSyncInterval(int value) =>
+      _syncIntervals.contains(value) ? value : _syncIntervals.first;
+
   AppSettings _buildSettings(AppState appState) {
     return appState.settings.copyWith(
       serverUrl: _serverController.text.trim(),
@@ -62,6 +138,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       password: _passwordController.text,
       syncIntervalHours: _syncInterval,
       syncWifiOnly: _syncWifiOnly,
+      syncOnStartup: _syncOnStartup,
       storagePath: _storageController.text.trim(),
     );
   }
@@ -161,204 +238,210 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return Form(
           key: _formKey,
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
             children: [
-              _ConnectionCard(appState: appState),
+              _ConnectionStatusRow(appState: appState),
+              const _SettingsDivider(),
+              const _SectionTitle(title: 'Server account'),
+              TextFormField(
+                controller: _serverController,
+                decoration: const InputDecoration(
+                  labelText: 'Server URL',
+                  hintText: 'https://ytnd.example.com',
+                  prefixIcon: Icon(Icons.public),
+                ),
+                keyboardType: TextInputType.url,
+                textInputAction: TextInputAction.next,
+                validator: (value) => (value == null || value.trim().isEmpty)
+                    ? 'Server URL is required'
+                    : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _usernameController,
+                decoration: const InputDecoration(
+                  labelText: 'Username',
+                  prefixIcon: Icon(Icons.person_outline),
+                ),
+                textInputAction: TextInputAction.next,
+                validator: (value) => (value == null || value.trim().isEmpty)
+                    ? 'Username is required'
+                    : null,
+              ),
+              const SizedBox(height: 10),
+              TextFormField(
+                controller: _passwordController,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  prefixIcon: const Icon(Icons.lock_outline),
+                  suffixIcon: IconButton(
+                    tooltip: _obscurePassword
+                        ? 'Show password'
+                        : 'Hide password',
+                    onPressed: () => setState(
+                      () => _obscurePassword = !_obscurePassword,
+                    ),
+                    icon: Icon(
+                      _obscurePassword
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                    ),
+                  ),
+                ),
+                obscureText: _obscurePassword,
+                validator: (value) => (value == null || value.isEmpty)
+                    ? 'Password is required'
+                    : null,
+              ),
               const SizedBox(height: 12),
-              _SettingsSection(
-                title: 'Server account',
-                icon: Icons.dns_outlined,
+              Row(
                 children: [
-                  TextFormField(
-                    controller: _serverController,
-                    decoration: const InputDecoration(
-                      labelText: 'Server URL',
-                      hintText: 'https://ytnd.example.com',
-                      prefixIcon: Icon(Icons.public),
-                    ),
-                    keyboardType: TextInputType.url,
-                    textInputAction: TextInputAction.next,
-                    validator: (value) =>
-                        (value == null || value.trim().isEmpty)
-                        ? 'Server URL is required'
-                        : null,
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _usernameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Username',
-                      prefixIcon: Icon(Icons.person_outline),
-                    ),
-                    textInputAction: TextInputAction.next,
-                    validator: (value) =>
-                        (value == null || value.trim().isEmpty)
-                        ? 'Username is required'
-                        : null,
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _passwordController,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      suffixIcon: IconButton(
-                        tooltip: _obscurePassword
-                            ? 'Show password'
-                            : 'Hide password',
-                        onPressed: () => setState(
-                          () => _obscurePassword = !_obscurePassword,
-                        ),
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: appState.isAuthenticating ? null : _signIn,
+                      icon: appState.isAuthenticating
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.login),
+                      label: Text(
+                        appState.isAuthenticated ? 'Reconnect' : 'Sign in',
                       ),
                     ),
-                    obscureText: _obscurePassword,
-                    validator: (value) => (value == null || value.isEmpty)
-                        ? 'Password is required'
-                        : null,
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: appState.isAuthenticating ? null : _signIn,
-                          icon: appState.isAuthenticating
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.login),
-                          label: Text(
-                            appState.isAuthenticated ? 'Reconnect' : 'Sign in',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      IconButton.outlined(
-                        tooltip: 'Save without connecting',
-                        onPressed: appState.isSavingSettings ? null : _save,
-                        icon: const Icon(Icons.save_outlined),
-                      ),
-                    ],
+                  const SizedBox(width: 10),
+                  IconButton.outlined(
+                    tooltip: 'Save without connecting',
+                    onPressed: appState.isSavingSettings ? null : _save,
+                    icon: const Icon(Icons.save_outlined),
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              _SettingsSection(
-                title: 'Sync and storage',
-                icon: Icons.sync_outlined,
+              const _SettingsDivider(),
+              const _SectionTitle(title: 'Sync'),
+              DropdownButtonFormField<int>(
+                initialValue: _syncInterval,
+                decoration: const InputDecoration(
+                  labelText: 'Background sync interval',
+                  prefixIcon: Icon(Icons.schedule),
+                ),
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('Manual only')),
+                  DropdownMenuItem(value: 1, child: Text('Every 1 hour')),
+                  DropdownMenuItem(value: 2, child: Text('Every 2 hours')),
+                  DropdownMenuItem(value: 6, child: Text('Every 6 hours')),
+                  DropdownMenuItem(value: 12, child: Text('Every 12 hours')),
+                ],
+                onChanged: _isSavingSyncPreferences
+                    ? null
+                    : (value) {
+                        if (value != null) {
+                          _updateSyncPreferences(syncIntervalHours: value);
+                        }
+                      },
+              ),
+              const SizedBox(height: 6),
+              _SwitchRow(
+                icon: Icons.start_outlined,
+                title: 'Sync on startup',
+                subtitle: 'Run once after a saved session is restored',
+                value: _syncOnStartup,
+                onChanged: _isSavingSyncPreferences
+                    ? null
+                    : (value) => _updateSyncPreferences(syncOnStartup: value),
+              ),
+              _SwitchRow(
+                icon: Icons.wifi,
+                title: 'Sync only on WiFi',
+                subtitle: _syncInterval == 0 && !_syncOnStartup
+                    ? 'Not used for manual sync'
+                    : null,
+                value: _syncWifiOnly,
+                onChanged: _isSavingSyncPreferences ||
+                        (_syncInterval == 0 && !_syncOnStartup)
+                    ? null
+                    : (value) => _updateSyncPreferences(syncWifiOnly: value),
+              ),
+              const _SettingsDivider(),
+              const _SectionTitle(title: 'Storage'),
+              TextFormField(
+                controller: _storageController,
+                decoration: const InputDecoration(
+                  labelText: 'Storage path',
+                  helperText: 'Default: /storage/emulated/0/Music/YTND',
+                  prefixIcon: Icon(Icons.folder_outlined),
+                ),
+                validator: (value) => (value == null || value.trim().isEmpty)
+                    ? 'Storage path is required'
+                    : null,
+              ),
+              const SizedBox(height: 10),
+              Row(
                 children: [
-                  DropdownButtonFormField<int>(
-                    initialValue: _syncInterval,
-                    decoration: const InputDecoration(
-                      labelText: 'Background sync interval',
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _pickFolder,
+                      icon: const Icon(Icons.create_new_folder_outlined),
+                      label: const Text('Choose folder'),
                     ),
-                    items: const [
-                      DropdownMenuItem(value: 0, child: Text('Manual only')),
-                      DropdownMenuItem(value: 1, child: Text('Every 1 hour')),
-                      DropdownMenuItem(value: 2, child: Text('Every 2 hours')),
-                      DropdownMenuItem(value: 6, child: Text('Every 6 hours')),
-                      DropdownMenuItem(
-                        value: 12,
-                        child: Text('Every 12 hours'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) setState(() => _syncInterval = value);
-                    },
                   ),
-                  const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Sync only on WiFi'),
-                    subtitle: _syncInterval == 0
-                        ? const Text('Not used for manual sync')
-                        : null,
-                    value: _syncWifiOnly,
-                    onChanged: _syncInterval == 0
-                        ? null
-                        : (value) => setState(() => _syncWifiOnly = value),
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _storageController,
-                    decoration: const InputDecoration(
-                      labelText: 'Storage path',
-                      helperText: 'Default: /storage/emulated/0/Music/YTND',
-                      prefixIcon: Icon(Icons.folder_outlined),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: appState.isSavingSettings ? null : _save,
+                      icon: appState.isSavingSettings
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save),
+                      label: const Text('Save'),
                     ),
-                    validator: (value) =>
-                        (value == null || value.trim().isEmpty)
-                        ? 'Storage path is required'
-                        : null,
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _pickFolder,
-                          icon: const Icon(Icons.create_new_folder_outlined),
-                          label: const Text('Choose folder'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: appState.isSavingSettings ? null : _save,
-                          icon: appState.isSavingSettings
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.save),
-                          label: const Text('Save'),
-                        ),
-                      ),
-                    ],
                   ),
                 ],
               ),
               if (appState.pendingShareCount > 0) ...[
-                const SizedBox(height: 12),
-                _SettingsSection(
-                  title: 'Pending shared links',
+                const _SettingsDivider(),
+                const _SectionTitle(title: 'Pending shared links'),
+                _ActionRow(
                   icon: Icons.pending_actions,
-                  children: [
-                    Text(
-                      '${appState.pendingShareCount} link(s) will be added after sign-in.',
-                    ),
-                    const SizedBox(height: 10),
-                    FilledButton.icon(
-                      onPressed:
-                          appState.isAuthenticated && !appState.isAddingToQueue
-                          ? appState.retryPendingShareUrls
-                          : null,
-                      icon: const Icon(Icons.playlist_add),
-                      label: const Text('Add pending links'),
-                    ),
-                  ],
+                  title:
+                      '${appState.pendingShareCount} link(s) waiting for sign-in',
+                  subtitle: 'They will be added after the server connects.',
+                  trailing: FilledButton.icon(
+                    onPressed:
+                        appState.isAuthenticated && !appState.isAddingToQueue
+                        ? appState.retryPendingShareUrls
+                        : null,
+                    icon: const Icon(Icons.playlist_add),
+                    label: const Text('Add'),
+                  ),
                 ),
               ],
-              if (appState.isAuthenticated) ...[
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: appState.logout,
-                  icon: const Icon(Icons.logout),
-                  label: const Text('Sign out'),
+              const _SettingsDivider(),
+              const _SectionTitle(title: 'Session'),
+              if (appState.isAuthenticated)
+                _ActionRow(
+                  icon: Icons.logout,
+                  title: 'Signed in',
+                  subtitle: appState.settings.username,
+                  trailing: OutlinedButton.icon(
+                    onPressed: appState.logout,
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Sign out'),
+                  ),
+                )
+              else
+                _ActionRow(
+                  icon: Icons.lock_outline,
+                  title: 'Signed out',
+                  subtitle: 'Connect to sync songs and queue.',
+                  trailing: TextButton(
+                    onPressed: _signIn,
+                    child: const Text('Sign in'),
+                  ),
                 ),
-              ],
             ],
           ),
         );
@@ -367,8 +450,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-class _ConnectionCard extends StatelessWidget {
-  const _ConnectionCard({required this.appState});
+class _SyncPreferenceDraft {
+  const _SyncPreferenceDraft({
+    required this.revision,
+    required this.syncIntervalHours,
+    required this.syncWifiOnly,
+    required this.syncOnStartup,
+  });
+
+  final int revision;
+  final int syncIntervalHours;
+  final bool syncWifiOnly;
+  final bool syncOnStartup;
+}
+
+class _ConnectionStatusRow extends StatelessWidget {
+  const _ConnectionStatusRow({required this.appState});
 
   final AppState appState;
 
@@ -376,13 +473,8 @@ class _ConnectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final color = _colorForStatus(scheme, appState.connectionStatus);
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: color.withValues(alpha: 0.12),
-        border: Border.all(color: color.withValues(alpha: 0.32)),
-      ),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -396,10 +488,10 @@ class _ConnectionCard extends StatelessWidget {
                   appState.connectionTitle,
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
-                const SizedBox(height: 3),
+                const SizedBox(height: 2),
                 Text(
                   appState.connectionMessage,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
@@ -453,41 +545,128 @@ class _ConnectionCard extends StatelessWidget {
   }
 }
 
-class _SettingsSection extends StatelessWidget {
-  const _SettingsSection({
-    required this.title,
-    required this.icon,
-    required this.children,
-  });
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle({required this.title});
 
   final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Text(
+        title,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+          color: Theme.of(context).colorScheme.primary,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsDivider extends StatelessWidget {
+  const _SettingsDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Divider(
+        height: 1,
+        color: Theme.of(context).colorScheme.outlineVariant,
+      ),
+    );
+  }
+}
+
+class _SwitchRow extends StatelessWidget {
+  const _SwitchRow({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.onChanged,
+    this.subtitle,
+  });
+
   final IconData icon;
-  final List<Widget> children;
+  final String title;
+  final String? subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        color: scheme.surface,
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
         children: [
-          Row(
-            children: [
-              Icon(icon, color: scheme.primary),
-              const SizedBox(width: 8),
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-            ],
+          Icon(icon, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.bodyLarge),
+                if (subtitle != null)
+                  Text(
+                    subtitle!,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+              ],
+            ),
           ),
-          const SizedBox(height: 14),
-          ...children,
+          Switch(value: value, onChanged: onChanged),
         ],
       ),
+    );
+  }
+}
+
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.trailing,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Widget trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(icon, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.bodyLarge),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        trailing,
+      ],
     );
   }
 }
