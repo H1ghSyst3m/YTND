@@ -2,13 +2,24 @@
 """
 Utility functions and robust logging for YTND.
 """
-import re, os, json, logging, logging.handlers, queue, atexit
+import re, os, json, logging, logging.handlers, queue, atexit, threading
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 from .config import LOG_DIR
 
 _illegal = r'[/\\:*?"<>|]'
 _re_illegal = re.compile(_illegal)
+_json_write_locks_guard = threading.Lock()
+_json_write_locks: dict[Path, threading.Lock] = {}
+
+@contextmanager
+def _locked_json_path(path: Path):
+    resolved = path.resolve()
+    with _json_write_locks_guard:
+        lock = _json_write_locks.setdefault(resolved, threading.Lock())
+    with lock:
+        yield resolved
 
 def sanitize_user_id(user_id: str) -> str:
     """
@@ -41,6 +52,32 @@ def sanitize_filename(name: str) -> str:
     for bad, good in repl.items():
         name = name.replace(bad, good)
     return _re_illegal.sub("", name).strip().rstrip(".")
+
+def write_json_atomic(
+    path: Path,
+    data,
+    *,
+    indent: int = 4,
+    ensure_ascii: bool = False,
+) -> None:
+    """Write JSON through a temp file and atomic replace."""
+    with _locked_json_path(path) as target:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(
+            f".{target.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+        )
+        try:
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=indent, ensure_ascii=ensure_ascii)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, target)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
 def is_youtube_playlist_url(url: str) -> bool:
     """Check if URL is a YouTube playlist URL."""

@@ -18,12 +18,17 @@ class FakeSettingsService extends SettingsService {
   AppSettings settings;
   List<String> pendingShareUrls;
   String? dismissedConnectionNoticeKey;
+  Object? saveError;
 
   @override
   Future<AppSettings> load() async => settings;
 
   @override
   Future<void> save(AppSettings settings) async {
+    final error = saveError;
+    if (error != null) {
+      throw error;
+    }
     this.settings = settings;
   }
 

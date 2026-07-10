@@ -122,6 +122,51 @@ def test_process_entry_records_server_download_time(monkeypatch):
     )
 
 
+def test_manager_write_song_list_writes_valid_json_atomically():
+    uid = "atomicmanager"
+    folder = manager_module.OUTPUT_ROOT / uid
+
+    manager_module._write_song_list(
+        uid,
+        [{"id": "song1", "title": "Atomic", "artist": "Writer"}],
+    )
+
+    song_list = folder / "song-list.json"
+    assert json.loads(song_list.read_text(encoding="utf-8")) == [
+        {"id": "song1", "title": "Atomic", "artist": "Writer"}
+    ]
+    assert not list(folder.glob(".song-list.json.*.tmp"))
+
+
+def test_downloader_save_song_cache_uses_atomic_json_writer(monkeypatch):
+    downloader = Downloader("atomicdownloader")
+    downloader._song_cache = {
+        "song2": {"id": "song2", "title": "Atomic", "artist": "Downloader"}
+    }
+    calls = []
+    original = downloader_module.write_json_atomic
+
+    def spy_write_json_atomic(path, data, **kwargs):
+        calls.append((path, data))
+        return original(path, data, **kwargs)
+
+    monkeypatch.setattr(
+        downloader_module, "write_json_atomic", spy_write_json_atomic
+    )
+
+    downloader._save_song_cache()
+
+    assert calls == [
+        (
+            downloader.song_list_path,
+            [{"id": "song2", "title": "Atomic", "artist": "Downloader"}],
+        )
+    ]
+    assert json.loads(downloader.song_list_path.read_text(encoding="utf-8")) == [
+        {"id": "song2", "title": "Atomic", "artist": "Downloader"}
+    ]
+
+
 def test_api_songs_backfills_downloaded_at_from_audio_mtime(client):
     uid = "songdateapi"
     try:

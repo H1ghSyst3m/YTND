@@ -157,12 +157,19 @@ class CoverCacheService {
 
   String _safeBasename(String value) {
     final basename = value.split(RegExp(r'[\\/]')).last;
+    if (basename.isEmpty) {
+      return 'cover';
+    }
     final safe = _safePathSegment(basename);
     return safe.isEmpty ? 'cover' : safe;
   }
 
   String _safePathSegment(String value) {
-    return value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]+'), '_');
+    final safe = value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]+'), '_');
+    if (safe.isEmpty || safe == '.' || safe == '..') {
+      return '_';
+    }
+    return safe;
   }
 
   String _stableHash(String value) {

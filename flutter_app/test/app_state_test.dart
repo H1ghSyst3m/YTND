@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:ytnd/models/app_settings.dart';
+import 'package:ytnd/models/download_queue_item.dart';
 import 'package:ytnd/models/song.dart';
 import 'package:ytnd/services/api_service.dart';
 import 'package:ytnd/services/sync_service.dart';
@@ -685,6 +686,39 @@ void main() {
     );
   });
 
+  test('retrying failed queue item refreshes it as queued', () async {
+    final settings = FakeSettingsService(settings: _signedInSettings);
+    final api = FakeApiService()..queue = ['https://youtu.be/abc123'];
+    final websocket = FakeWebsocketService();
+    final state = _buildState(
+      settingsService: settings,
+      apiService: api,
+      websocketService: websocket,
+    );
+    await state.initialize();
+
+    websocket.controller.add(
+      const WsEvent({
+        'type': 'download_progress',
+        'url': 'https://www.youtube.com/watch?v=abc123&list=context',
+        'status': 'error',
+        'error': 'video unavailable',
+      }),
+    );
+    await pumpEventQueue();
+
+    expect(state.failedQueue, hasLength(1));
+
+    final retried = await state.retryFailedDownload(state.failedQueue.single);
+    await state.refreshQueue();
+
+    expect(retried, isTrue);
+    expect(state.failedQueue, isEmpty);
+    expect(state.queuedQueue, hasLength(1));
+    expect(state.queuedQueue.single.status, DownloadStatus.pending);
+    expect(state.queuedQueue.single.error, isNull);
+  });
+
   for (final kind in [
     ApiErrorKind.notFound,
     ApiErrorKind.conflict,
@@ -762,6 +796,8 @@ void main() {
     expect(await firstSync, isFalse);
     expect(state.isSyncing, isFalse);
     expect(state.connectionStatus, ConnectionStatus.unreachable);
+    expect(state.lastErrorMessage, 'Sync skipped: no network access.');
+    expect(state.connectionMessage, 'Sync skipped: no network access.');
   });
 
   test('syncNow stores a summary without bloating connection copy', () async {

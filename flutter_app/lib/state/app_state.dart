@@ -421,6 +421,7 @@ class AppState extends ChangeNotifier {
     _lastErrorMessage = null;
     notifyListeners();
 
+    final previousSettings = _settings;
     try {
       _settings = _settings.copyWith(
         syncIntervalHours: syncIntervalHours,
@@ -436,6 +437,7 @@ class AppState extends ChangeNotifier {
       return true;
     } catch (e, st) {
       debugPrint('Saving sync preferences failed: $e\n$st');
+      _settings = previousSettings;
       _lastErrorMessage = _messageFor(e, 'Could not save sync settings.');
       _statusMessage = _lastErrorMessage!;
       _markFreshConnectionNotice();
@@ -554,6 +556,7 @@ class AppState extends ChangeNotifier {
       final connected = await _hasNetwork();
       if (!connected) {
         _statusMessage = 'Sync skipped: no network access.';
+        _lastErrorMessage = _statusMessage;
         _connectionStatus = ConnectionStatus.unreachable;
         _latestSyncSummary = SyncSummary(
           remoteCount: 0,
@@ -901,12 +904,14 @@ class AppState extends ChangeNotifier {
   }
 
   Future<Map<String, bool>> _resolveDownloadedSongs(List<Song> songs) async {
-    final statuses = <String, bool>{};
-    for (final song in songs) {
-      statuses[_songStatusKey(song)] =
-          song.fileAvailable && await _isDownloadedOnDevice(song);
-    }
-    return statuses;
+    final results = await Future.wait(
+      songs.map((song) async {
+        final downloaded =
+            song.fileAvailable && await _isDownloadedOnDevice(song);
+        return MapEntry(_songStatusKey(song), downloaded);
+      }),
+    );
+    return Map.fromEntries(results);
   }
 
   Future<bool> _isDownloadedOnDevice(Song song) async {
@@ -1282,7 +1287,18 @@ class AppState extends ChangeNotifier {
       if (!seenKeys.add(key)) {
         continue;
       }
-      merged.add(currentByKey[key] ?? DownloadQueueItem(url: url));
+      final current = currentByKey[key];
+      merged.add(
+        current == null
+            ? DownloadQueueItem(url: url)
+            : current.copyWith(
+                status: DownloadStatus.pending,
+                percentage: null,
+                downloadedBytes: null,
+                totalBytes: null,
+                error: null,
+              ),
+      );
     }
 
     for (final item in _downloadQueue) {

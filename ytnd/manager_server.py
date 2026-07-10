@@ -37,7 +37,14 @@ from .downloader import (
     get_js_runtime_status,
     _is_invalid_cookie_error,
 )
-from .utils import sanitize_filename, sanitize_user_id, is_youtube_playlist_url, strip_playlist_context, logger
+from .utils import (
+    sanitize_filename,
+    sanitize_user_id,
+    is_youtube_playlist_url,
+    strip_playlist_context,
+    logger,
+    write_json_atomic,
+)
 from . import database
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -558,8 +565,7 @@ def _write_song_list(user_id: str, items: List[dict]) -> None:
     
     folder.mkdir(parents=True, exist_ok=True)
     f = folder / "song-list.json"
-    with f.open("w", encoding="utf-8") as fh:
-        json.dump(items, fh, indent=4, ensure_ascii=False)
+    write_json_atomic(f, items)
 
 def _probe_url_available(url: str) -> Tuple[bool, str]:
     if len(url) > 2000:

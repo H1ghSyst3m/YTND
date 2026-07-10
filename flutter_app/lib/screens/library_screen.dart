@@ -469,10 +469,11 @@ class _SongRow extends StatelessWidget {
   }
 
   String _dateLabel(Song song) {
-    final date = song.parsedDownloadedAt;
-    if (date == null) {
+    final downloadedAt = song.parsedDownloadedAt;
+    if (downloadedAt == null) {
       return 'No download date';
     }
+    final date = downloadedAt.toLocal();
     const months = [
       'Jan',
       'Feb',
@@ -530,7 +531,25 @@ class _SongCover extends StatefulWidget {
   final String cookieHeader;
 
   static const double _size = 48;
+  static const int _maxProviderCacheSize = 160;
   static final Map<String, ImageProvider> _providerCache = {};
+
+  static ImageProvider? _cachedProviderFor(String coverUrl) {
+    final provider = _providerCache.remove(coverUrl);
+    if (provider == null) {
+      return null;
+    }
+    _providerCache[coverUrl] = provider;
+    return provider;
+  }
+
+  static void _cacheProvider(String coverUrl, ImageProvider provider) {
+    _providerCache.remove(coverUrl);
+    _providerCache[coverUrl] = provider;
+    while (_providerCache.length > _maxProviderCacheSize) {
+      _providerCache.remove(_providerCache.keys.first);
+    }
+  }
 
   @override
   State<_SongCover> createState() => _SongCoverState();
@@ -563,7 +582,7 @@ class _SongCoverState extends State<_SongCover> {
       return;
     }
 
-    final cachedProvider = _SongCover._providerCache[coverUrl];
+    final cachedProvider = _SongCover._cachedProviderFor(coverUrl);
     if (cachedProvider != null) {
       _provider = cachedProvider;
       _providerFuture = null;
@@ -573,7 +592,7 @@ class _SongCoverState extends State<_SongCover> {
     final memoryFile = CoverCacheService.instance.memoryFileFor(coverUrl);
     if (memoryFile != null) {
       final provider = FileImage(memoryFile);
-      _SongCover._providerCache[coverUrl] = provider;
+      _SongCover._cacheProvider(coverUrl, provider);
       _provider = provider;
       _providerFuture = null;
       return;
@@ -595,7 +614,7 @@ class _SongCoverState extends State<_SongCover> {
       return null;
     }
     final provider = FileImage(file);
-    _SongCover._providerCache[coverUrl] = provider;
+    _SongCover._cacheProvider(coverUrl, provider);
     return provider;
   }
 

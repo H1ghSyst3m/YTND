@@ -21,6 +21,24 @@ const _signedInSettings = AppSettings(
   storagePath: 'test-storage',
 );
 
+String _shortDate(DateTime date) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${months[date.month - 1]} ${date.day}, ${date.year}';
+}
+
 class CountingAppState extends AppState {
   CountingAppState({
     required FakeSettingsService settingsService,
@@ -109,7 +127,7 @@ void main() {
           title: 'Old video new server',
           artist: 'Artist B',
           date: '2020-01-01',
-          downloadedAt: '2026-02-01T12:00:00Z',
+          downloadedAt: '2026-02-01T23:30:00Z',
           fileAvailable: true,
         ),
         Song(
@@ -145,7 +163,10 @@ void main() {
       tester.getTopLeft(oldServer).dy,
       lessThan(tester.getTopLeft(unknownServer).dy),
     );
-    expect(find.text('Feb 1, 2026'), findsOneWidget);
+    expect(
+      find.text(_shortDate(DateTime.utc(2026, 2, 1, 23, 30).toLocal())),
+      findsOneWidget,
+    );
     expect(find.text('Jan 1, 2024'), findsOneWidget);
     expect(find.text('No download date'), findsOneWidget);
   });
@@ -251,6 +272,39 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(settings.settings.syncWifiOnly, isTrue);
+  });
+
+  testWidgets('settings sync controls revert when saving fails', (tester) async {
+    final settings = FakeSettingsService(settings: _signedInSettings)
+      ..saveError = Exception('save failed');
+    final api = FakeApiService();
+    final state = AppState(
+      settingsService: settings,
+      apiService: api,
+      syncService: SyncService(api),
+      backgroundSyncService: FakeBackgroundSyncService(),
+      websocketService: FakeWebsocketService(),
+      shareIntentService: FakeShareIntentService(),
+    );
+    await state.initialize();
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider<AppState>.value(
+        value: state,
+        child: const MaterialApp(home: Scaffold(body: SettingsScreen())),
+      ),
+    );
+
+    expect(tester.widget<Switch>(find.byType(Switch).at(0)).value, isFalse);
+
+    await tester.tap(find.byType(Switch).at(0));
+    await tester.pumpAndSettle();
+
+    expect(state.settings.syncOnStartup, isFalse);
+    expect(settings.settings.syncOnStartup, isFalse);
+    expect(tester.widget<Switch>(find.byType(Switch).at(0)).value, isFalse);
+    expect(find.text('Could not save sync settings.'), findsOneWidget);
   });
 
   testWidgets('settings account and storage edits require explicit save', (
